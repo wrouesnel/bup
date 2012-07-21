@@ -49,8 +49,19 @@ def _dirlist():
     return l
 
 
-def _recursive_dirlist(prepend, xdev, bup_dir=None, excluded_paths=None):
+def _recursive_dirlist(prepend, xdev, bup_dir=None,
+                       excluded_paths=None,
+                       exclude_rxs=None):
     for (name,pst) in _dirlist():
+        if exclude_rxs:
+            exclude = False
+            for rx in exclude_rxs:
+                if rx.search(prepend + name):
+                    debug1('Skipping %r: excluded via rx.\n' % (prepend+name))
+                    exclude = True
+                    break
+            if exclude:
+                continue
         if name.endswith('/'):
             if xdev != None and pst.st_dev != xdev:
                 debug1('Skipping %r: different filesystem.\n' % (prepend+name))
@@ -70,13 +81,15 @@ def _recursive_dirlist(prepend, xdev, bup_dir=None, excluded_paths=None):
             else:
                 for i in _recursive_dirlist(prepend=prepend+name, xdev=xdev,
                                             bup_dir=bup_dir,
-                                            excluded_paths=excluded_paths):
+                                            excluded_paths=excluded_paths,
+                                            exclude_rxs=exclude_rxs):
                     yield i
                 os.chdir('..')
         yield (prepend + name, pst)
 
 
-def recursive_dirlist(paths, xdev, bup_dir=None, excluded_paths=None):
+def recursive_dirlist(paths, xdev, bup_dir=None, excluded_paths=None,
+                      exclude_rxs=None):
     startdir = OsFile('.')
     try:
         assert(type(paths) != type(''))
@@ -104,7 +117,8 @@ def recursive_dirlist(paths, xdev, bup_dir=None, excluded_paths=None):
                 prepend = os.path.join(path, '')
                 for i in _recursive_dirlist(prepend=prepend, xdev=xdev,
                                             bup_dir=bup_dir,
-                                            excluded_paths=excluded_paths):
+                                            excluded_paths=excluded_paths,
+                                            exclude_rxs=exclude_rxs):
                     yield i
                 startdir.fchdir()
             else:

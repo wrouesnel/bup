@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import sys, stat, time, os
+import sys, stat, time, os, re
 from bup import metadata, options, git, index, drecurse, hlinkdb
 from bup.helpers import *
 from bup.hashsplit import GIT_MODE_TREE, GIT_MODE_FILE
@@ -67,7 +67,8 @@ def update_index(top, excluded_paths):
     bup_dir = os.path.abspath(git.repo())
     for (path,pst) in drecurse.recursive_dirlist([top], xdev=opt.xdev,
                                                  bup_dir=bup_dir,
-                                                 excluded_paths=excluded_paths):
+                                                 excluded_paths=excluded_paths,
+                                                 exclude_rxs=exclude_rxs):
         if opt.verbose>=2 or (opt.verbose==1 and stat.S_ISDIR(pst.st_mode)):
             sys.stdout.write('%s\n' % path)
             sys.stdout.flush()
@@ -159,6 +160,7 @@ fake-invalid mark all index entries as invalid
 f,indexfile=  the name of the index file (normally BUP_DIR/bupindex)
 exclude=   a path to exclude from the backup (can be used more than once)
 exclude-from= a file that contains exclude paths (can be used more than once)
+exclude-rx= skip paths that match the unanchored regular expression
 v,verbose  increase log output (can be used more than once)
 x,xdev,one-file-system  don't cross filesystem boundaries
 """
@@ -182,6 +184,13 @@ if opt.check:
     check_index(index.Reader(indexfile))
 
 excluded_paths = drecurse.parse_excludes(flags)
+
+exclude_rxs = [v for f, v in flags if f == '--exclude-rx']
+for i in range(len(exclude_rxs)):
+    try:
+        exclude_rxs[i] = re.compile(exclude_rxs[i])
+    except re.error:
+        o.fatal('invalid --exclude-rx pattern:' % exclude_rxs[i])
 
 paths = index.reduce_paths(extra)
 
