@@ -49,11 +49,12 @@ def check_index(reader):
 
 
 def update_index(top, excluded_paths):
-    tmax = time.time() - 1
+    # tmax and start must be epoch nanoseconds.
+    tmax = (time.time() - 1) * 10e8
     ri = index.Reader(indexfile)
     wi = index.Writer(indexfile, tmax)
     rig = IterHelper(ri.iter(name=top))
-    tstart = int(time.time())
+    tstart = int(time.time()) * 10e8
 
     hlinks = hlinkdb.HLinkDB(indexfile + '.hlink')
 
