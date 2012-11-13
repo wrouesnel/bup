@@ -1,6 +1,7 @@
 #!/usr/bin/env python
+
 import sys, stat, time, os
-from bup import options, git, index, drecurse, hlinkdb
+from bup import metadata, options, git, index, drecurse, hlinkdb
 from bup.helpers import *
 from bup.hashsplit import GIT_MODE_TREE, GIT_MODE_FILE
 
@@ -50,7 +51,8 @@ def check_index(reader):
 
 def update_index(top, excluded_paths):
     ri = index.Reader(indexfile)
-    wi = index.Writer(indexfile)
+    msw = index.MetaStoreWriter(indexfile + '.meta')
+    wi = index.Writer(indexfile, msw)
     rig = IterHelper(ri.iter(name=top))
     tstart = int(time.time()) * 10e8
 
@@ -85,7 +87,13 @@ def update_index(top, excluded_paths):
                 hlinks.del_path(rig.cur.name)
             if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
                 hlinks.add_path(path, pst.st_dev, pst.st_ino)
-            rig.cur.from_stat(pst, tstart)
+            meta = metadata.from_path(path, statinfo=pst)
+            # Clear these so they don't bloat the store -- they're
+            # already in the index (since they vary a lot and
+            # they're fixed length).
+            meta.ctime = meta.mtime = meta.atime = 0
+            meta_ofs = msw.store(meta)
+            rig.cur.from_stat(pst, meta_ofs, tstart)
             if not (rig.cur.flags & index.IX_HASHVALID):
                 if hashgen:
                     (rig.cur.gitmode, rig.cur.sha) = hashgen(path)
@@ -95,7 +103,11 @@ def update_index(top, excluded_paths):
             rig.cur.repack()
             rig.next()
         else:  # new paths
-            wi.add(path, pst, hashgen = hashgen)
+            meta = metadata.from_path(path, statinfo=pst)
+            # See same assignment to 0, above, for rationale.
+            meta.atime = meta.mtime = meta.ctime = 0
+            meta_ofs = msw.store(meta)
+            wi.add(path, pst, meta_ofs, hashgen = hashgen)
             if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
                 hlinks.add_path(path, pst.st_dev, pst.st_ino)
 
@@ -113,7 +125,7 @@ def update_index(top, excluded_paths):
                 check_index(ri)
                 log('check: before merging: newfile\n')
                 check_index(wr)
-            mi = index.Writer(indexfile)
+            mi = index.Writer(indexfile, msw)
 
             for e in index.merge(ri, wr):
                 # FIXME: shouldn't we remove deleted entries eventually?  When?
@@ -126,6 +138,7 @@ def update_index(top, excluded_paths):
     else:
         wi.close()
 
+    msw.close()
     hlinks.commit_save()
 
 

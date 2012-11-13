@@ -1,6 +1,6 @@
 import os
 import time
-from bup import index
+from bup import index, metadata
 from bup.helpers import *
 import bup.xstat as xstat
 from wvtest import *
@@ -21,11 +21,14 @@ def index_writer():
     unlink('index.tmp')
     ds = xstat.stat('.')
     fs = xstat.stat('tindex.py')
-    w = index.Writer('index.tmp')
-    w.add('/var/tmp/sporky', fs)
-    w.add('/etc/passwd', fs)
-    w.add('/etc/', ds)
-    w.add('/', ds)
+    unlink('index.meta.tmp')
+    ms = index.MetaStoreWriter('index.meta.tmp');
+    w = index.Writer('index.tmp', ms)
+    w.add('/var/tmp/sporky', fs, 0)
+    w.add('/etc/passwd', fs, 0)
+    w.add('/etc/', ds, 0)
+    w.add('/', ds, 0)
+    ms.close()
     w.close()
 
 
@@ -55,15 +58,15 @@ def index_negative_timestamps():
     # Dec 31, 1969
     os.utime("foo", (-86400, -86400))
     now = time.time()
-    e = index.BlankNewEntry("foo")
-    e.from_stat(xstat.stat("foo"), now)
+    e = index.BlankNewEntry("foo", 0)
+    e.from_stat(xstat.stat("foo"), 0, now)
     assert len(e.packed())
     WVPASS()
 
     # Jun 10, 1893
     os.utime("foo", (-0x80000000, -0x80000000))
-    e = index.BlankNewEntry("foo")
-    e.from_stat(xstat.stat("foo"), now)
+    e = index.BlankNewEntry("foo", 0)
+    e.from_stat(xstat.stat("foo"), 0, now)
     assert len(e.packed())
     WVPASS()
 
@@ -72,26 +75,38 @@ def index_negative_timestamps():
 
 @wvtest
 def index_dirty():
+    unlink('index.meta.tmp')
+    unlink('index2.meta.tmp')
+    unlink('index3.meta.tmp')
+    default_meta = metadata.Metadata()
+    ms1 = index.MetaStoreWriter('index.meta.tmp')
+    ms2 = index.MetaStoreWriter('index2.meta.tmp')
+    ms3 = index.MetaStoreWriter('index3.meta.tmp')
+    meta_ofs1 = ms1.store(default_meta)
+    meta_ofs2 = ms2.store(default_meta)
+    meta_ofs3 = ms3.store(default_meta)
     unlink('index.tmp')
     unlink('index2.tmp')
+    unlink('index3.tmp')
+
     ds = xstat.stat('.')
     fs = xstat.stat('tindex.py')
     
-    w1 = index.Writer('index.tmp')
-    w1.add('/a/b/x', fs)
-    w1.add('/a/b/c', fs)
-    w1.add('/a/b/', ds)
-    w1.add('/a/', ds)
+    w1 = index.Writer('index.tmp', ms1)
+    w1.add('/a/b/x', fs, meta_ofs1)
+    w1.add('/a/b/c', fs, meta_ofs1)
+    w1.add('/a/b/', ds, meta_ofs1)
+    w1.add('/a/', ds, meta_ofs1)
     #w1.close()
     WVPASS()
 
-    w2 = index.Writer('index2.tmp')
-    w2.add('/a/b/n/2', fs)
+    w2 = index.Writer('index2.tmp', ms2)
+    w2.add('/a/b/n/2', fs, meta_ofs2)
     #w2.close()
     WVPASS()
 
-    w3 = index.Writer('index3.tmp')
-    w3.add('/a/c/n/3', fs)
+    w3 = index.Writer('index3.tmp', ms3)
+    w3.add('/a/c/n/3', fs, meta_ofs3)
     #w3.close()
     WVPASS()
 
