@@ -48,11 +48,11 @@ class Level:
         return (ofs,n)
 
 
-def _golevel(level, f, ename, newentry, tmax):
+def _golevel(level, f, ename, newentry):
     # close nodes back up the tree
     assert(level)
     while ename[:len(level.ename)] != level.ename:
-        n = BlankNewEntry(level.ename[-1], tmax)
+        n = BlankNewEntry(level.ename[-1])
         n.flags |= IX_EXISTS
         (n.children_ofs,n.children_n) = level.write(f)
         level.parent.list.append(n)
@@ -64,7 +64,7 @@ def _golevel(level, f, ename, newentry, tmax):
 
     # are we in precisely the right place?
     assert(ename == level.ename)
-    n = newentry or BlankNewEntry(ename and level.ename[-1] or None, tmax)
+    n = newentry or BlankNewEntry(ename and level.ename[-1] or None)
     (n.children_ofs,n.children_n) = level.write(f)
     if level.parent:
         level.parent.list.append(n)
@@ -74,10 +74,9 @@ def _golevel(level, f, ename, newentry, tmax):
 
 
 class Entry:
-    def __init__(self, basename, name, tmax):
+    def __init__(self, basename, name):
         self.basename = str(basename)
         self.name = str(name)
-        self.tmax = tmax
         self.children_ofs = 0
         self.children_n = 0
 
@@ -135,14 +134,6 @@ class Entry:
             self.gid += 0x100000000
         assert(self.uid >= 0)
         assert(self.gid >= 0)
-        self.mtime = self._fixup_time(self.mtime)
-        self.ctime = self._fixup_time(self.ctime)
-
-    def _fixup_time(self, t):
-        if self.tmax != None and t > self.tmax:
-            return self.tmax
-        else:
-            return t
 
     def is_valid(self):
         f = IX_HASHVALID|IX_EXISTS
@@ -188,11 +179,11 @@ class Entry:
 
 
 class NewEntry(Entry):
-    def __init__(self, basename, name, tmax, dev, ino, nlink,
+    def __init__(self, basename, name, dev, ino, nlink,
                  ctime, mtime, atime,
                  uid, gid, size, mode, gitmode, sha, flags,
                  children_ofs, children_n):
-        Entry.__init__(self, basename, name, tmax)
+        Entry.__init__(self, basename, name)
         (self.dev, self.ino, self.nlink, self.ctime, self.mtime, self.atime,
          self.uid, self.gid, self.size, self.mode, self.gitmode, self.sha,
          self.flags, self.children_ofs, self.children_n
@@ -202,15 +193,15 @@ class NewEntry(Entry):
 
 
 class BlankNewEntry(NewEntry):
-    def __init__(self, basename, tmax):
-        NewEntry.__init__(self, basename, basename, tmax,
+    def __init__(self, basename):
+        NewEntry.__init__(self, basename, basename,
                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                           0, EMPTY_SHA, 0, 0, 0)
 
 
 class ExistingEntry(Entry):
     def __init__(self, parent, basename, name, m, ofs):
-        Entry.__init__(self, basename, name, None)
+        Entry.__init__(self, basename, name)
         self.parent = parent
         self._m = m
         self._ofs = ofs
@@ -369,14 +360,13 @@ def pathsplit(p):
 
 
 class Writer:
-    def __init__(self, filename, tmax):
+    def __init__(self, filename):
         self.rootlevel = self.level = Level([], None)
         self.f = None
         self.count = 0
         self.lastfile = None
         self.filename = None
         self.filename = filename = realpath(filename)
-        self.tmax = tmax
         (dir,name) = os.path.split(filename)
         (ffd,self.tmpname) = tempfile.mkstemp('.tmp', filename, dir)
         self.f = os.fdopen(ffd, 'wb', 65536)
@@ -394,7 +384,7 @@ class Writer:
 
     def flush(self):
         if self.level:
-            self.level = _golevel(self.level, self.f, [], None, self.tmax)
+            self.level = _golevel(self.level, self.f, [], None)
             self.count = self.rootlevel.count
             if self.count:
                 self.count += 1
@@ -415,7 +405,7 @@ class Writer:
             raise Error('%r must come before %r' 
                              % (''.join(e.name), ''.join(self.lastfile)))
             self.lastfile = e.name
-        self.level = _golevel(self.level, self.f, ename, entry, self.tmax)
+        self.level = _golevel(self.level, self.f, ename, entry)
 
     def add(self, name, st, hashgen = None):
         endswith = name.endswith('/')
@@ -432,7 +422,7 @@ class Writer:
         if st:
             isdir = stat.S_ISDIR(st.st_mode)
             assert(isdir == endswith)
-            e = NewEntry(basename, name, self.tmax,
+            e = NewEntry(basename, name,
                          st.st_dev, st.st_ino, st.st_nlink,
                          st.st_ctime, st.st_mtime, st.st_atime,
                          st.st_uid, st.st_gid,
@@ -440,7 +430,7 @@ class Writer:
                          0, 0)
         else:
             assert(endswith)
-            e = BlankNewEntry(basename, tmax)
+            e = BlankNewEntry(basename)
             e.gitmode = gitmode
             e.sha = sha
             e.flags = flags
