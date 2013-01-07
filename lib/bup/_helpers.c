@@ -27,8 +27,12 @@
 #ifdef HAVE_SYS_IOCTL_H
 #include <sys/ioctl.h>
 #endif
+#ifdef HAVE_LINUX_EXT2_FS_H
+#include <linux/ext2_fs.h>
+#endif
 
-#if defined(FS_IOC_GETFLAGS) && defined(FS_IOC_SETFLAGS)
+#if defined(FS_IOC_GETFLAGS) && defined(FS_IOC_SETFLAGS) \
+    && defined(HAVE_LINUX_EXT2_FS_H)
 #define BUP_HAVE_FILE_ATTRS 1
 #endif
 
@@ -910,6 +914,15 @@ static PyObject *bup_lutime_ns(PyObject *self, PyObject *args)
 # define BUP_STAT_CTIME_NS(st) 0
 #endif
 
+/* Inline function for nanosecond time conversions  in stat_struct_to_py */
+inline void normalize_stat_time(long long *time, long *time_ns)
+{
+    if (*time_ns < 0)
+    {
+        *time_ns += 1000000000;
+        *time -= 1;
+    }
+}
 
 static void set_invalid_timespec_ns_msg(const char *field,
                                         long value,
@@ -931,11 +944,23 @@ static PyObject *stat_struct_to_py(const struct stat *st,
                                    const char *filename,
                                    int fd)
 {
+	/* make an editable copy of time values */
+    long long atime = (long long) st->st_atime;
+    long long mtime = (long long) st->st_mtime;
+    long long ctime = (long long) st->st_ctime;
+
     long atime_ns = BUP_STAT_ATIME_NS(st);
     long mtime_ns = BUP_STAT_MTIME_NS(st);
     long ctime_ns = BUP_STAT_CTIME_NS(st);
-
-    /* Enforce the current timespec nanosecond range expectations. */
+    
+    /* normalize nanosecond timespecs */
+    normalize_stat_time(&atime, &atime_ns);
+    normalize_stat_time(&mtime, &mtime_ns);
+    normalize_stat_time(&ctime, &ctime_ns);
+    
+    /* Enforce the current timespec nanosecond range expectations. 
+     * Note: we must still check for negative values in case the system
+     * is returning larger-then possible negative nanosecond values */
     if (atime_ns < 0 || atime_ns > 999999999)
     {
         set_invalid_timespec_ns_msg("atime", atime_ns, filename, fd);
@@ -961,11 +986,11 @@ static PyObject *stat_struct_to_py(const struct stat *st,
                          (unsigned long) st->st_gid,
                          (unsigned long) st->st_rdev,
                          (unsigned long) st->st_size,
-                         (long long) st->st_atime,
+                         (long long) atime,
                          (long) atime_ns,
-                         (long long) st->st_mtime,
+                         (long long) mtime,
                          (long) mtime_ns,
-                         (long long) st->st_ctime,
+                         (long long) ctime,
                          (long) ctime_ns);
 }
 
