@@ -172,13 +172,6 @@ if (opt.fake_valid or opt.fake_invalid) and not opt.update:
 if opt.fake_valid and opt.fake_invalid:
     o.fatal('--fake-valid is incompatible with --fake-invalid')
 
-# FIXME: remove this once we account for timestamp races, i.e. index;
-# touch new-file; index.  It's possible for this to happen quickly
-# enough that new-file ends up with the same timestamp as the first
-# index, and then bup will ignore it.
-tick_start = time.time()
-time.sleep(1 - (tick_start - int(tick_start)))
-
 git.check_repo_or_die()
 indexfile = opt.indexfile or git.repo('bupindex')
 
@@ -197,6 +190,8 @@ if opt.update:
         o.fatal('update mode (-u) requested but no paths given')
     for (rp,path) in paths:
         update_index(rp, excluded_paths)
+
+update_tick_expiration = int(time.time() + 1)
 
 if opt['print'] or opt.status or opt.modified:
     for (name, ent) in index.Reader(indexfile).filter(extra or ['']):
@@ -227,3 +222,8 @@ if opt.check and (opt['print'] or opt.status or opt.modified or opt.update):
 if saved_errors:
     log('WARNING: %d errors encountered.\n' % len(saved_errors))
     sys.exit(1)
+
+# Sleep for whatever remains of the "post update" tick.
+now = time.time()
+if now < update_tick_expiration:
+    time.sleep(min(1, update_tick_expiration - now))

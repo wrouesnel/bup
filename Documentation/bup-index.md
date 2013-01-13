@@ -39,6 +39,29 @@ backup set.
 other purposes (such as speeding up other programs that
 need the same information).
 
+Note that you must ensure that the filesystem is "sufficiently quiet"
+during an index run; otherwise some changes may be overlooked.
+
+For example, if the filesystem's timestamp resolution is one second
+(i.e. ext3, small ext4, vfat), then a change that occurs after a path
+has been indexed, but within the same second, may be overlooked by a
+subsequent index or save.  That's because the index will have recorded
+the state and modification time of the path when it was encountered.
+Since the subsequent filesystem modification happens within the same
+second, it won't result in a detectable change to the modification
+time, and save or index won't know to reexamine the path.
+
+As a convenience, bup provides the command "bup tick" that will pause
+for a length of time that's long enough to avoid this problem in all
+known cases, and "bup index" always waits for a tick after it finishes
+indexing.
+
+Given that, the filesystem's timestamp resolution should not cause
+changes to be overlooked in common cases like this:
+
+    $ bup index
+    $ make-changes-to-the-filesystem
+    $ bup save
 
 # MODES
 
