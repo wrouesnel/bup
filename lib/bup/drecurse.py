@@ -77,9 +77,13 @@ def _recursive_dirlist(prepend, xdev, bup_dir=None,
                                             bup_dir=bup_dir,
                                             excluded_paths=excluded_paths,
                                             exclude_rxs=exclude_rxs):
+                    cwd = OsFile(os.getcwd())
                     yield i
+                    cwd.fchdir()
                 os.chdir('..')
+        cwd = OsFile(os.getcwd())
         yield (prepend + name, pst)
+        cwd.fchdir()
 
 
 def recursive_dirlist(paths, xdev, bup_dir=None, excluded_paths=None,
@@ -114,10 +118,13 @@ def recursive_dirlist(paths, xdev, bup_dir=None, excluded_paths=None,
                                             excluded_paths=excluded_paths,
                                             exclude_rxs=exclude_rxs):
                     yield i
+                    cwd.fchdir()
                 startdir.fchdir()
             else:
                 prepend = path
+            cwd = OsFile(os.getcwd())
             yield (prepend,pst)
+            cwd.fchdir()
     except:
         try:
             startdir.fchdir()
