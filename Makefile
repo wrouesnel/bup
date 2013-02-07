@@ -76,7 +76,7 @@ lib/bup/_version.py:
 	./format-subst.pl $@.pre >$@.new
 	mv $@.new $@
 
-runtests: all runtests-python runtests-cmdline
+runtests: all testdata runtests-python runtests-cmdline
 
 runtests-python:
 	$(PYTHON) wvtest.py \
@@ -87,6 +87,9 @@ runtests-python:
 runtests-cmdline: all
 	t/test.sh
 	t/test-meta.sh
+
+testdata:
+	t/generate-test-data.sh
 
 stupid:
 	PATH=/bin:/usr/bin $(MAKE) test
@@ -163,3 +166,4 @@ clean: Documentation/clean config/clean
 	if test -e bupmeta.tmp/testfs-limited; \
 	  then umount bupmeta.tmp/testfs-limited || true; fi
 	rm -rf *.tmp *.tmp.meta t/*.tmp lib/*/*/*.tmp build lib/bup/build lib/bup/t/testfs
+	rm -rf t/sampledata t/testfile1 t/testfile2
