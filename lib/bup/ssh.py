@@ -5,7 +5,7 @@ import sys, os, re, subprocess
 from bup import helpers, path
 
 
-def connect(rhost, port, subcmd):
+def connect(rhost, port, subcmd, sshcmd=None):
     """Connect to 'rhost' and execute the bup subcommand 'subcmd' on it."""
     assert(not re.search(r'[^\w-]', subcmd))
     nicedir = re.sub(r':', "_", path.exedir())
@@ -27,9 +27,14 @@ def connect(rhost, port, subcmd):
         cmd = r"""
                    sh -c PATH=%s:'$PATH BUP_DEBUG=%s BUP_FORCE_TTY=%s bup %s'
                """ % (escapedir, buglvl, force_tty, subcmd)
-        argv = ['ssh']
-        if port:
-            argv.extend(('-p', port))
+        # if no sshcmd, set default command
+        if sshcmd == None:
+            argv = ["ssh"]
+            if port:
+                argv.extend(('-p', port))
+        else:
+            argv = sshcmd.split()
+        
         argv.extend((rhost, '--', cmd.strip()))
         #helpers.log('argv is: %r\n' % argv)
     def setup():
