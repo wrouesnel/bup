@@ -12,6 +12,7 @@ optspec = """
 bup save [-tc] [-n name] <filenames...>
 --
 r,remote=  hostname:/path/to/repo of remote repository
+e,remote-shell=  remote shell commandline
 t,tree     output a tree id
 c,commit   output a commit id
 n,name=    name of backup set to update (if any)
@@ -75,7 +76,7 @@ if opt.name and opt.name.startswith('.'):
 refname = opt.name and 'refs/heads/%s' % opt.name or None
 if opt.remote or is_reverse:
     try:
-        cli = client.Client(opt.remote)
+        cli = client.Client(opt.remote, sshcmd=opt.remote_shell)
     except client.ClientError, e:
         log('error: %s' % e)
         sys.exit(1)

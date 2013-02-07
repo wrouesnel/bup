@@ -52,7 +52,7 @@ def parse_remote(remote):
 
 
 class Client:
-    def __init__(self, remote, create=False):
+    def __init__(self, remote, create=False, sshcmd=None):
         self._busy = self.conn = None
         self.sock = self.p = self.pout = self.pin = None
         is_reverse = os.environ.get('BUP_SERVER_REVERSE')
@@ -71,7 +71,7 @@ class Client:
             if self.protocol in ('ssh', 'file'):
                 try:
                     # FIXME: ssh and file shouldn't use the same module
-                    self.p = ssh.connect(self.host, self.port, 'server')
+                    self.p = ssh.connect(self.host, self.port, 'server', sshcmd)
                     self.pout = self.p.stdout
                     self.pin = self.p.stdin
                     self.conn = Conn(self.pout, self.pin)
