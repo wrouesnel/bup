@@ -8,7 +8,7 @@ bup-save - create a new bup backup set
 
 # SYNOPSIS
 
-bup save \[-r [*user*@]*host*:*path*]\] 
+bup save \[-r [*user*@]*host*:*path*]\] \[-e remote-shell-command\] 
 		\<-t|-c|-n *name*\> \[-#\] \[-f *indexfile*\]
 		\[-v\] \[-q\] [\--smaller=*maxsize*] \<paths...\>;
 
@@ -40,10 +40,16 @@ handling of metadata.
     *path* is omitted, uses the default path on the remote
     server (you still need to include the ':'). The connection 
     to the remote server is made with SSH. SSH settings can be 
-    handled with an appropriate Host entry in ~/.ssh/config. 
-    Even though the destination is remote, a local bup repository 
-    is still required.
-    
+    handled with an appropriate Host entry in ~/.ssh/config or
+    via the `--remote-shell` argument. Even though the destination 
+    is remote, a local bup repository is still required.
+
+-e, \--remote-shell=remote-shell-commandline
+:   allows the specification of an alternate remote shell command line for
+    connecting to a server. A common use case is to specify optional parameters
+    to the SSH command line. For example to use a custom port and key file:
+        -e 'ssh -i /path/to/keyfile -p 22056'
+
 -t, \--tree
 :   after creating the backup set, print out the git tree
     id of the resulting backup.

@@ -15,7 +15,7 @@ bup split -b COMMON\_OPTIONS
 bup split \<--noop \[--copy\]|--copy\> COMMON\_OPTIONS
 
 COMMON\_OPTIONS
-  ~ \[-r [*user*@]*host*:*path*\]
+  ~ \[-r [*user*@]*host*:*path*\] \[-e remote-shell-command\] 
     \[-v\] \[-q\] \[-d *seconds-since-epoch*\] \[\--bench\]
     \[\--max-pack-size=*bytes*\] \[-#\] \[\--bwlimit=*bytes*\]
     \[\--max-pack-objects=*n*\] \[\--fanout=*count*\]
@@ -95,6 +95,12 @@ being the most likely choice.
     made with SSH. SSH settings can be handled with an appropriate 
     Host entry in ~/.ssh/config. Even though the destination is remote,
     a local bup repository is still required. 
+
+-e, \--remote-shell=remote-shell-commandline
+:   allows the specification of an alternate remote shell command line for
+    connecting to a server. A common use case is to specify optional parameters
+    to the SSH command line. For example to use a custom port and key file:
+        -e 'ssh -i /path/to/keyfile -p 22056'
 
 -d, \--date=*seconds-since-epoch*
 :   specify the date inscribed in the commit (seconds since 1970-01-01).

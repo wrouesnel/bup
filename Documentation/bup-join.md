@@ -8,7 +8,8 @@ bup-join - concatenate files from a bup repository
 
 # SYNOPSIS
 
-bup join \[-r [*user*@]*host*:[*path*]\] \[refs or hashes...\]
+bup join \[-r [*user*@]*host*:*path*\] \[-e remote-shell-commandline\] 
+         \[refs or hashes...\]
 
 # DESCRIPTION
 
@@ -33,6 +34,12 @@ join` reads them from stdin instead.
     can be handled with an appropriate Host entry in ~/.ssh/config. 
     Even though the data source is remote, a local bup repository is 
     still required.
+
+-e, \--remote-shell=remote-shell-commandline
+:   allows the specification of an alternate remote shell command line for
+    connecting to a server. A common use case is to specify optional parameters
+    to the SSH command line. For example to use a custom port and key file:
+        -e 'ssh -i /path/to/keyfile -p 22056'
 
 # EXAMPLES
     # split and then rejoin a file using its tree id
