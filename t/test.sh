@@ -624,7 +624,8 @@ WVPASS bup save -n compression -0 --strip $TOP/Documentation
 # is harmless there.)
 WVPASSEQ "$(bup ls compression/latest/ | sort)" \
 	 "$(ls $TOP/Documentation | grep -v '^\.' | sort)"
-COMPRESSION_0_SIZE=$(du -k -s $D | cut -f1)
+sync
+COMPRESSION_0_SIZE=$(du -s $D | cut -f1)
 
 D=compression9.tmp
 export BUP_DIR="$TOP/$D/.bup"
@@ -634,7 +635,8 @@ WVPASS bup init
 WVPASS bup index $TOP/Documentation
 WVPASS bup save -n compression -9 --strip $TOP/Documentation
 WVPASSEQ "$(bup ls compression/latest/ | sort)" "$(ls $TOP/Documentation | sort)"
-COMPRESSION_9_SIZE=$(du -k -s $D | cut -f1)
+sync
+COMPRESSION_9_SIZE=$(du -s $D | cut -f1)
 
 WVPASS [ "$COMPRESSION_9_SIZE" -lt "$COMPRESSION_0_SIZE" ]
 
