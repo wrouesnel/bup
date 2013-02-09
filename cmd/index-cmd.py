@@ -48,12 +48,28 @@ def check_index(reader):
         raise
     log('check: passed.\n')
 
+# bup index version of graft path. Returns a tuple containing the grafted
+# path (i.e. bup archive relative path) and a bool indicating if the returned
+# path had no extra components (i.e. it is the graft root)
+def graftpath(graft_points, path):
+    for (oldpath, newpath) in graft_points:
+        if path.startswith(oldpath):
+            result = os.path.join(newpath, path.split(oldpath)[1])
+            if oldpath == os.path.normpath(path): 
+                return (result, True)
+            else:
+                return (result, False)
+    # literal paths are never a graft root
+    return (path, False)
 
-def update_index(top, excluded_paths):
+def update_index(top, excluded_paths, graft_points):
     ri = index.Reader(indexfile)
     msw = index.MetaStoreWriter(indexfile + '.meta')
     wi = index.Writer(indexfile, msw)
-    rig = IterHelper(ri.iter(name=top))
+    
+    grafted_top, is_graft_root = graftpath(graft_points, top)
+    rig = IterHelper(ri.iter(name=grafted_top))
+    
     tstart = int(time.time()) * 10e8
 
     hlinks = hlinkdb.HLinkDB(indexfile + '.hlink')
@@ -65,12 +81,16 @@ def update_index(top, excluded_paths):
 
     total = 0
     bup_dir = os.path.abspath(git.repo())
-    for (path,pst) in drecurse.recursive_dirlist([top], xdev=opt.xdev,
+    for (realpath,pst) in drecurse.recursive_dirlist([top], xdev=opt.xdev,
                                                  bup_dir=bup_dir,
                                                  excluded_paths=excluded_paths,
                                                  exclude_rxs=exclude_rxs):
+        path, path_is_graft_root = graftpath(graft_points, realpath)
         if opt.verbose>=2 or (opt.verbose==1 and stat.S_ISDIR(pst.st_mode)):
-            sys.stdout.write('%s\n' % path)
+            if realpath != path:
+                sys.stdout.write('%s => %s\n' % (realpath, path))
+            else:
+                sys.stdout.write('%s\n' % path)
             sys.stdout.flush()
             qprogress('Indexing: %d\r' % total)
         elif not (total % 128):
@@ -88,7 +108,7 @@ def update_index(top, excluded_paths):
                 hlinks.del_path(rig.cur.name)
             if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
                 hlinks.add_path(path, pst.st_dev, pst.st_ino)
-            meta = metadata.from_path(path, statinfo=pst)
+            meta = metadata.from_path(realpath, statinfo=pst)
             # Clear these so they don't bloat the store -- they're
             # already in the index (since they vary a lot and
             # they're fixed length).
@@ -104,11 +124,15 @@ def update_index(top, excluded_paths):
             rig.cur.repack()
             rig.next()
         else:  # new paths
-            meta = metadata.from_path(path, statinfo=pst)
+            meta = metadata.from_path(realpath, statinfo=pst)
             # See same assignment to 0, above, for rationale.
             meta.atime = meta.mtime = meta.ctime = 0
             meta_ofs = msw.store(meta)
-            wi.add(path, pst, meta_ofs, hashgen = hashgen)
+            # Blank graft root means inherit from upper level graft.
+            if path_is_graft_root:
+                wi.add(path, realpath, pst, meta_ofs, hashgen = hashgen)
+            else:
+                wi.add(path, None, pst, meta_ofs, hashgen = hashgen)
             if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
                 hlinks.add_path(path, pst.st_dev, pst.st_ino)
 
@@ -142,7 +166,6 @@ def update_index(top, excluded_paths):
     msw.close()
     hlinks.commit_save()
 
-
 optspec = """
 bup index <-p|m|s|u> [options...] <filenames...>
 --
@@ -153,6 +176,7 @@ s,status   print each filename with a status char (A/M/D) (implies -p)
 u,update   recursively update the index entries for the given file/dir names (default if no mode is specified)
 check      carefully check index file integrity
  Options:
+graft=    a graft point of *old_path*=*new_path* (can be used more then once)
 H,hash     print the hash for each object next to its name
 l,long     print more information about each file
 fake-valid mark all index entries as up-to-date even if they aren't
@@ -194,11 +218,25 @@ for i in range(len(exclude_rxs)):
 
 paths = index.reduce_paths(extra)
 
+graft_points = []
+if opt.graft:
+    for (option, parameter) in flags:
+        if option == "--graft":
+            splitted_parameter = parameter.split('=')
+            if len(splitted_parameter) != 2:
+                o.fatal("a graft point must be of the form old_path=new_path")
+            old_path, new_path = splitted_parameter
+            if not (old_path and new_path):
+                o.fatal("a graft point cannot be empty")
+            graft_points.append((realpath(old_path), new_path))
+
+graft_points.sort(reverse=True)
+
 if opt.update:
     if not extra:
         o.fatal('update mode (-u) requested but no paths given')
     for (rp,path) in paths:
-        update_index(rp, excluded_paths)
+        update_index(rp, excluded_paths, graft_points)
 
 update_tick_expiration = int(time.time() + 1)
 

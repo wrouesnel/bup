@@ -5,7 +5,7 @@ from bup.helpers import *
 EMPTY_SHA = '\0'*20
 FAKE_SHA = '\x01'*20
 
-INDEX_HDR = 'BUPI\0\0\0\5'
+INDEX_HDR = 'BUPI\0\0\0\6'
 
 # Time values are handled as integer nanoseconds since the epoch in
 # memory, but are written as xstat/metadata timespecs.  This behavior
@@ -140,9 +140,13 @@ def _golevel(level, f, ename, newentry, metastore):
 
 
 class Entry:
-    def __init__(self, basename, name, meta_ofs):
+    def __init__(self, basename, name, realname, meta_ofs):
         self.basename = str(basename)
         self.name = str(name)
+        if realname != None:
+            self.realname = str(realname)
+        else:
+            self.realname = ""
         self.meta_ofs = meta_ofs
         self.children_ofs = 0
         self.children_n = 0
@@ -245,15 +249,15 @@ class Entry:
                 or cmp(a.is_fake(), b.is_fake()))
 
     def write(self, f):
-        f.write(self.basename + '\0' + self.packed())
+        f.write(self.basename + '\0' + self.realname + '\0' + self.packed())
 
 
 class NewEntry(Entry):
-    def __init__(self, basename, name, dev, ino, nlink,
+    def __init__(self, basename, name, realname, dev, ino, nlink,
                  ctime, mtime, atime,
                  uid, gid, size, mode, gitmode, sha, flags, meta_ofs,
                  children_ofs, children_n):
-        Entry.__init__(self, basename, name, meta_ofs)
+        Entry.__init__(self, basename, name, realname, meta_ofs)
         (self.dev, self.ino, self.nlink, self.ctime, self.mtime, self.atime,
          self.uid, self.gid, self.size, self.mode, self.gitmode, self.sha,
          self.flags, self.children_ofs, self.children_n
@@ -264,14 +268,14 @@ class NewEntry(Entry):
 
 class BlankNewEntry(NewEntry):
     def __init__(self, basename, meta_ofs):
-        NewEntry.__init__(self, basename, basename,
+        NewEntry.__init__(self, basename, basename, None,
                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                           0, EMPTY_SHA, 0, meta_ofs, 0, 0)
 
 
 class ExistingEntry(Entry):
-    def __init__(self, parent, basename, name, m, ofs):
-        Entry.__init__(self, basename, name, None)
+    def __init__(self, parent, basename, name, realname, m, ofs):
+        Entry.__init__(self, basename, name, realname, None)
         self.parent = parent
         self._m = m
         self._ofs = ofs
@@ -317,12 +321,19 @@ class ExistingEntry(Entry):
         assert(self.children_n < 1000000)
         for i in xrange(self.children_n):
             eon = self._m.find('\0', ofs)
+            eorn = self._m.find('\0', eon+1)
             assert(eon >= 0)
             assert(eon >= ofs)
             assert(eon > ofs)
+            assert(eorn >= 0)
+            assert(eorn >= ofs)
+            assert(eorn > ofs)
+            assert(eorn > eon)
             basename = str(buffer(self._m, ofs, eon-ofs))
+            realname = str(buffer(self._m, eon+1, eorn-ofs+eon+1))
             child = ExistingEntry(self, basename, self.name + basename,
-                                  self._m, eon+1)
+                                  self.realname,
+                                  self._m, eorn+1)
             if (not dname
                  or child.name.startswith(dname)
                  or child.name.endswith('/') and dname.startswith(child.name)):
@@ -331,7 +342,7 @@ class ExistingEntry(Entry):
                         yield e
             if not name or child.name == name or child.name.startswith(dname):
                 yield child
-            ofs = eon + 1 + ENTLEN
+            ofs = eorn + 1 + ENTLEN
 
     def __iter__(self):
         return self.iter()
@@ -374,19 +385,26 @@ class Reader:
         ofs = len(INDEX_HDR)
         while ofs+ENTLEN <= len(self.m)-FOOTLEN:
             eon = self.m.find('\0', ofs)
+            eorn = self.m.find('\0', eon+1)
             assert(eon >= 0)
             assert(eon >= ofs)
             assert(eon > ofs)
+            assert(eorn >= 0)
+            assert(eorn >= ofs)
+            assert(eorn > ofs)
+            assert(eorn > eon)
             basename = str(buffer(self.m, ofs, eon-ofs))
-            yield ExistingEntry(None, basename, basename, self.m, eon+1)
-            ofs = eon + 1 + ENTLEN
+            realname = str(buffer(self.m, eon+1, eorn-ofs+eon+1))
+            yield ExistingEntry(None, basename, basename, realname,
+                                self.m, eorn+1)
+            ofs = eorn + 1 + ENTLEN
 
     def iter(self, name=None, wantrecurse=None):
         if len(self.m) > len(INDEX_HDR)+ENTLEN:
             dname = name
             if dname and not dname.endswith('/'):
                 dname += '/'
-            root = ExistingEntry(None, '/', '/',
+            root = ExistingEntry(None, '/', '/', None,
                                  self.m, len(self.m)-FOOTLEN-ENTLEN)
             for sub in root.iter(name=name, wantrecurse=wantrecurse):
                 yield sub
@@ -478,7 +496,9 @@ class Writer:
             self.lastfile = e.name
         self.level = _golevel(self.level, self.f, ename, entry, self.metastore)
 
-    def add(self, name, st, meta_ofs, hashgen = None):
+    def add(self, name, realname, st, meta_ofs, hashgen = None):
+        if not realname:
+            realname = name
         endswith = name.endswith('/')
         ename = pathsplit(name)
         basename = ename[-1]
@@ -486,14 +506,14 @@ class Writer:
         flags = IX_EXISTS
         sha = None
         if hashgen:
-            (gitmode, sha) = hashgen(name)
+            (gitmode, sha) = hashgen(realname)
             flags |= IX_HASHVALID
         else:
             (gitmode, sha) = (0, EMPTY_SHA)
         if st:
             isdir = stat.S_ISDIR(st.st_mode)
             assert(isdir == endswith)
-            e = NewEntry(basename, name,
+            e = NewEntry(basename, name, realname,
                          st.st_dev, st.st_ino, st.st_nlink,
                          st.st_ctime, st.st_mtime, st.st_atime,
                          st.st_uid, st.st_gid,
