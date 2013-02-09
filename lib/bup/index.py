@@ -330,7 +330,7 @@ class ExistingEntry(Entry):
             assert(eorn > ofs)
             assert(eorn > eon)
             basename = str(buffer(self._m, ofs, eon-ofs))
-            realname = str(buffer(self._m, eon+1, eorn-ofs+eon+1))
+            realname = str(buffer(self._m, eon+1, eorn-1-eon))
             child = ExistingEntry(self, basename, self.name + basename,
                                   realname,
                                   self._m, eorn+1)
@@ -394,7 +394,7 @@ class Reader:
             assert(eorn > ofs)
             assert(eorn > eon)
             basename = str(buffer(self.m, ofs, eon-ofs))
-            realname = str(buffer(self.m, eon+1, eorn-ofs+eon+1))
+            realname = str(buffer(self.m, eon+1, eorn-1-eon))
             yield ExistingEntry(None, basename, basename, realname,
                                 self.m, eorn+1)
             ofs = eorn + 1 + ENTLEN
