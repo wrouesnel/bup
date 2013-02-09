@@ -24,10 +24,10 @@ def index_writer():
     unlink('index.meta.tmp')
     ms = index.MetaStoreWriter('index.meta.tmp');
     w = index.Writer('index.tmp', ms)
-    w.add('/var/tmp/sporky', fs, 0)
-    w.add('/etc/passwd', fs, 0)
-    w.add('/etc/', ds, 0)
-    w.add('/', ds, 0)
+    w.add('/var/tmp/sporky', None, fs, 0)
+    w.add('/etc/passwd', None, fs, 0)
+    w.add('/etc/', None, ds, 0)
+    w.add('/', None, ds, 0)
     ms.close()
     w.close()
 
@@ -93,20 +93,20 @@ def index_dirty():
     fs = xstat.stat('tindex.py')
     
     w1 = index.Writer('index.tmp', ms1)
-    w1.add('/a/b/x', fs, meta_ofs1)
-    w1.add('/a/b/c', fs, meta_ofs1)
-    w1.add('/a/b/', ds, meta_ofs1)
-    w1.add('/a/', ds, meta_ofs1)
+    w1.add('/a/b/x', None, fs, meta_ofs1)
+    w1.add('/a/b/c', None, fs, meta_ofs1)
+    w1.add('/a/b/', None, ds, meta_ofs1)
+    w1.add('/a/', None, ds, meta_ofs1)
     #w1.close()
     WVPASS()
 
     w2 = index.Writer('index2.tmp', ms2)
-    w2.add('/a/b/n/2', fs, meta_ofs2)
+    w2.add('/a/b/n/2', None, fs, meta_ofs2)
     #w2.close()
     WVPASS()
 
     w3 = index.Writer('index3.tmp', ms3)
-    w3.add('/a/c/n/3', fs, meta_ofs3)
+    w3.add('/a/c/n/3', None, fs, meta_ofs3)
     #w3.close()
     WVPASS()
 
