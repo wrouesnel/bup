@@ -48,26 +48,19 @@ def check_index(reader):
         raise
     log('check: passed.\n')
 
-# bup index version of graft path. Returns a tuple containing the grafted
-# path (i.e. bup archive relative path) and a bool indicating if the returned
-# path had no extra components (i.e. it is the graft root)
 def graftpath(graft_points, path):
     for (oldpath, newpath) in graft_points:
         if path.startswith(oldpath):
             result = os.path.join(newpath, path.split(oldpath)[1])
-            if oldpath == os.path.normpath(path): 
-                return (result, True)
-            else:
-                return (result, False)
-    # literal paths are never a graft root
-    return (path, False)
+            return result
+    return path
 
 def update_index(top, excluded_paths, graft_points):
     ri = index.Reader(indexfile)
     msw = index.MetaStoreWriter(indexfile + '.meta')
     wi = index.Writer(indexfile, msw)
     
-    grafted_top, is_graft_root = graftpath(graft_points, top)
+    grafted_top = graftpath(graft_points, top)
     rig = IterHelper(ri.iter(name=grafted_top))
     
     tstart = int(time.time()) * 10e8
@@ -85,7 +78,7 @@ def update_index(top, excluded_paths, graft_points):
                                                  bup_dir=bup_dir,
                                                  excluded_paths=excluded_paths,
                                                  exclude_rxs=exclude_rxs):
-        path, path_is_graft_root = graftpath(graft_points, realpath)
+        path = graftpath(graft_points, realpath)
         if opt.verbose>=2 or (opt.verbose==1 and stat.S_ISDIR(pst.st_mode)):
             if realpath != path:
                 sys.stdout.write('%s => %s\n' % (realpath, path))
@@ -128,11 +121,7 @@ def update_index(top, excluded_paths, graft_points):
             # See same assignment to 0, above, for rationale.
             meta.atime = meta.mtime = meta.ctime = 0
             meta_ofs = msw.store(meta)
-            # Blank graft root means inherit from upper level graft.
-            if path_is_graft_root:
-                wi.add(path, realpath, pst, meta_ofs, hashgen = hashgen)
-            else:
-                wi.add(path, None, pst, meta_ofs, hashgen = hashgen)
+            wi.add(path, realpath, pst, meta_ofs, hashgen = hashgen)
             if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
                 hlinks.add_path(path, pst.st_dev, pst.st_ino)
 

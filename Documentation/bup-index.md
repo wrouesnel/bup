@@ -91,6 +91,12 @@ changes to be overlooked in common cases like this:
 
 # OPTIONS
 
+\--graft
+:   adds a graft point of *old_path*=*new_path* to the index. 
+    During `bup save`, files indexed at *old_path* will be stored
+    in the archive under *new_path*. Graft points may be specified
+    with a relative *old_path* by omitting the precreding /.
+
 -H, \--hash
 :   for each file printed, prepend the most recently
     recorded hash code.  The hash code is normally

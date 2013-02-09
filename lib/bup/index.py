@@ -143,10 +143,10 @@ class Entry:
     def __init__(self, basename, name, realname, meta_ofs):
         self.basename = str(basename)
         self.name = str(name)
-        if realname != None:
-            self.realname = str(realname)
+        if realname == None:
+            self.realname = name
         else:
-            self.realname = ""
+            self.realname = str(realname)
         self.meta_ofs = meta_ofs
         self.children_ofs = 0
         self.children_n = 0
@@ -332,7 +332,7 @@ class ExistingEntry(Entry):
             basename = str(buffer(self._m, ofs, eon-ofs))
             realname = str(buffer(self._m, eon+1, eorn-ofs+eon+1))
             child = ExistingEntry(self, basename, self.name + basename,
-                                  self.realname,
+                                  realname,
                                   self._m, eorn+1)
             if (not dname
                  or child.name.startswith(dname)
@@ -428,6 +428,7 @@ class Reader:
             self.m = None
             self.writable = False
 
+    # TODO: add realname support
     def filter(self, prefixes, wantrecurse=None):
         for (rp, path) in reduce_paths(prefixes):
             for e in self.iter(rp, wantrecurse=wantrecurse):

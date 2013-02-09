@@ -718,19 +718,25 @@ def parse_date_or_fatal(str, fatal):
 # produce the wrong result, perhaps via unintended symlink resolution,
 # for example.
 
-def path_components(path):
+def path_components(path, bup_path=None):
     """Break path into a list of pairs of the form (name,
     full_path_to_name).  Path must start with '/'.
+    path is the real path to the file, bup_path is name of the path
+    inside the bup_archive we will be saving too.
     Example:
       '/home/foo' -> [('', '/'), ('home', '/home'), ('foo', '/home/foo')]"""
     assert(path.startswith('/'))
+    if bup_path == None:
+        bup_path = path
+    basepath = path.split(bup_path)[0]
+    
     # Since we assume path startswith('/'), we can skip the first element.
-    result = [('', '/')]
+    result = [('', basepath)]
     norm_path = os.path.abspath(path)
     if norm_path == '/':
         return result
-    full_path = ''
-    for p in norm_path.split('/')[1:]:
+    full_path = basepath
+    for p in bup_path.split('/')[1:]:
         full_path += '/' + p
         result.append((p, full_path))
     return result

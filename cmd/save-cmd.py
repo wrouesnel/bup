@@ -231,7 +231,8 @@ count = subcount = fcount = 0
 lastskip_name = None
 lastdir = ''
 for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
-    (dir, file) = os.path.split(ent.name)
+    (dir, file) = os.path.split(ent.realname)
+    (bup_dir, bup_file) = os.path.split(ent.name)
     exists = (ent.flags & index.IX_EXISTS)
     hashvalid = already_saved(ent)
     wasmissing = ent.sha_missing()
@@ -273,7 +274,7 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
     elif graft_points:
         dirp = grafted_path_components(graft_points, dir)
     else:
-        dirp = path_components(dir)
+        dirp = path_components(dir, bup_dir)
 
     # At this point, dirp contains a representation of the archive
     # path that looks like [(archive_dir_name, real_fs_path), ...].
