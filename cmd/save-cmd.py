@@ -231,8 +231,14 @@ count = subcount = fcount = 0
 lastskip_name = None
 lastdir = ''
 for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
+    # ent.name is the name from the index which determines the bup path
+    # ent.realname is actual file the index entry refers to at any given
+    # time.
+    # these two values are the same for an index which does not use any
+    # grafts.
     (dir, file) = os.path.split(ent.realname)
     (bup_dir, bup_file) = os.path.split(ent.name)
+    
     exists = (ent.flags & index.IX_EXISTS)
     hashvalid = already_saved(ent)
     wasmissing = ent.sha_missing()
@@ -248,10 +254,11 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
         else:
             status = ' '
         if opt.verbose >= 2:
-            log('%s %-70s\n' % (status, ent.name))
+            log('%s %-70s <= %s\n' % (status, ent.name, ent.realname))
         elif not stat.S_ISDIR(ent.mode) and lastdir != dir:
             if not lastdir.startswith(dir):
-                log('%s %-70s\n' % (status, os.path.join(dir, '')))
+                log('%s %-70s\n <= %s' % (status, os.path.join(dir, ''), 
+                                          os.path.join(bup_dir, '')))
             lastdir = dir
 
     if opt.progress:
@@ -342,7 +349,7 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
     else:
         if stat.S_ISREG(ent.mode):
             try:
-                f = hashsplit.open_noatime(ent.name)
+                f = hashsplit.open_noatime(ent.realname)
             except (IOError, OSError), e:
                 add_error(e)
                 lastskip_name = ent.name
@@ -352,14 +359,14 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
                                             w.new_blob, w.new_tree, [f],
                                             keep_boundaries=False)
                 except (IOError, OSError), e:
-                    add_error('%s: %s' % (ent.name, e))
+                    add_error('%s [%s]: %s' % (ent.realname, ent.name, e))
                     lastskip_name = ent.name
         else:
             if stat.S_ISDIR(ent.mode):
                 assert(0)  # handled above
             elif stat.S_ISLNK(ent.mode):
                 try:
-                    rl = os.readlink(ent.name)
+                    rl = os.readlink(ent.realname)
                 except (OSError, IOError), e:
                     add_error(e)
                     lastskip_name = ent.name
@@ -380,7 +387,7 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
             sort_key = git.shalist_item_sort_key((ent.mode, file, id))
             hlink = find_hardlink_target(hlink_db, ent)
             metalists[-1].append((sort_key,
-                                  metadata.from_path(ent.name,
+                                  metadata.from_path(ent.realname,
                                                      hardlink_target=hlink)))
     if exists and wasmissing:
         count += oldsize
