@@ -728,15 +728,18 @@ def path_components(path, bup_path=None):
     assert(path.startswith('/'))
     if bup_path == None:
         bup_path = path
-    basepath = path.split(bup_path)[0]
     
-    # Since we assume path startswith('/'), we can skip the first element.
-    result = [('', basepath)]
     norm_path = os.path.abspath(path)
-    if norm_path == '/':
+    norm_bup_path = os.path.normpath(bup_path)
+    basepath = norm_path.split(norm_bup_path)[0]
+
+    # root is a special case since it's never blank but basepath may be
+    result = [('', basepath or '/')]
+    if norm_path == (basepath or '/'):
         return result
+
     full_path = basepath
-    for p in bup_path.split('/')[1:]:
+    for p in norm_bup_path.split('/')[1:]:
         full_path += '/' + p
         result.append((p, full_path))
     return result
