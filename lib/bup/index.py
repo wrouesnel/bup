@@ -93,9 +93,10 @@ class MetaStoreWriter:
 
 
 class Level:
-    def __init__(self, ename, parent):
+    def __init__(self, ename, realename, parent):
         self.parent = parent
         self.ename = ename
+        self.realename = realename
         self.list = []
         self.count = 0
 
@@ -112,12 +113,12 @@ class Level:
         return (ofs,n)
 
 
-def _golevel(level, f, ename, newentry, metastore):
+def _golevel(level, f, ename, realename, newentry, metastore):
     # close nodes back up the tree
     assert(level)
     default_meta_ofs = metastore.store(metadata.Metadata())
     while ename[:len(level.ename)] != level.ename:
-        n = BlankNewEntry(level.ename[-1], default_meta_ofs)
+        n = BlankNewEntry(level.ename[-1], "", default_meta_ofs)
         n.flags |= IX_EXISTS
         (n.children_ofs,n.children_n) = level.write(f)
         level.parent.list.append(n)
@@ -130,7 +131,7 @@ def _golevel(level, f, ename, newentry, metastore):
     # are we in precisely the right place?
     assert(ename == level.ename)
     n = newentry or \
-        BlankNewEntry(ename and level.ename[-1] or None, default_meta_ofs)
+        BlankNewEntry(ename and level.ename[-1] or None, "", default_meta_ofs)
     (n.children_ofs,n.children_n) = level.write(f)
     if level.parent:
         level.parent.list.append(n)
@@ -267,8 +268,8 @@ class NewEntry(Entry):
 
 
 class BlankNewEntry(NewEntry):
-    def __init__(self, basename, meta_ofs):
-        NewEntry.__init__(self, basename, basename, None,
+    def __init__(self, basename, realname, meta_ofs):
+        NewEntry.__init__(self, basename, basename, realname,
                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                           0, EMPTY_SHA, 0, meta_ofs, 0, 0)
 
@@ -523,7 +524,7 @@ class Writer:
         else:
             assert(endswith)
             meta_ofs = self.metastore.store(metadata.Metadata())
-            e = BlankNewEntry(basename, meta_ofs)
+            e = BlankNewEntry(basename, realname, meta_ofs)
             e.gitmode = gitmode
             e.sha = sha
             e.flags = flags

@@ -58,14 +58,14 @@ def index_negative_timestamps():
     # Dec 31, 1969
     os.utime("foo", (-86400, -86400))
     now = time.time()
-    e = index.BlankNewEntry("foo", 0)
+    e = index.BlankNewEntry("foo", "foo", 0)
     e.from_stat(xstat.stat("foo"), 0, now)
     assert len(e.packed())
     WVPASS()
 
     # Jun 10, 1893
     os.utime("foo", (-0x80000000, -0x80000000))
-    e = index.BlankNewEntry("foo", 0)
+    e = index.BlankNewEntry("foo", "foo", 0)
     e.from_stat(xstat.stat("foo"), 0, now)
     assert len(e.packed())
     WVPASS()
