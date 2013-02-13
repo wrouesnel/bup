@@ -93,10 +93,10 @@ class MetaStoreWriter:
 
 
 class Level:
-    def __init__(self, ename, realename, parent):
+    def __init__(self, ename, erealname, parent):
         self.parent = parent
         self.ename = ename
-        self.realename = realename
+        self.erealname = erealname
         self.list = []
         self.count = 0
 
@@ -113,12 +113,13 @@ class Level:
         return (ofs,n)
 
 
-def _golevel(level, f, ename, realename, newentry, metastore):
+def _golevel(level, f, ename, erealname, newentry, metastore):
     # close nodes back up the tree
     assert(level)
     default_meta_ofs = metastore.store(metadata.Metadata())
     while ename[:len(level.ename)] != level.ename:
-        n = BlankNewEntry(level.ename[-1], "", default_meta_ofs)
+        n = BlankNewEntry(level.ename[-1], "".join(level.erealname),
+                          default_meta_ofs)
         n.flags |= IX_EXISTS
         (n.children_ofs,n.children_n) = level.write(f)
         level.parent.list.append(n)
@@ -126,12 +127,15 @@ def _golevel(level, f, ename, realename, newentry, metastore):
 
     # create nodes down the tree
     while len(level.ename) < len(ename):
-        level = Level(ename[:len(level.ename)+1], level)
+        level = Level(ename[:len(level.ename)+1], 
+                      erealname[:len(level.erealname)+1], level)
 
     # are we in precisely the right place?
     assert(ename == level.ename)
     n = newentry or \
-        BlankNewEntry(ename and level.ename[-1] or None, "", default_meta_ofs)
+        BlankNewEntry(ename and level.ename[-1] or None, 
+                      erealname and "".join(level.erealname) or None, 
+                      default_meta_ofs)
     (n.children_ofs,n.children_n) = level.write(f)
     if level.parent:
         level.parent.list.append(n)
@@ -451,7 +455,7 @@ def pathsplit(p):
 
 class Writer:
     def __init__(self, filename, metastore):
-        self.rootlevel = self.level = Level([], None)
+        self.rootlevel = self.level = Level([], [], None)
         self.f = None
         self.count = 0
         self.lastfile = None
@@ -475,7 +479,7 @@ class Writer:
 
     def flush(self):
         if self.level:
-            self.level = _golevel(self.level, self.f, [], None, self.metastore)
+            self.level = _golevel(self.level, self.f, [], [], None, self.metastore)
             self.count = self.rootlevel.count
             if self.count:
                 self.count += 1
@@ -491,18 +495,28 @@ class Writer:
             f.close()
             os.rename(self.tmpname, self.filename)
 
-    def _add(self, ename, entry):
+    def _add(self, ename, erealname, entry):
         if self.lastfile and self.lastfile <= ename:
             raise Error('%r must come before %r' 
                              % (''.join(e.name), ''.join(self.lastfile)))
             self.lastfile = e.name
-        self.level = _golevel(self.level, self.f, ename, entry, self.metastore)
+        self.level = _golevel(self.level, self.f, ename, erealname, entry, self.metastore)
 
     def add(self, name, realname, st, meta_ofs, hashgen = None):
-        if not realname:
-            realname = name
         endswith = name.endswith('/')
         ename = pathsplit(name)
+        
+        # treat blanks as non-graft cases
+        if not realname:
+            realname = name
+        
+        # erealname is ename but terminated with the full path to the root
+        # of this graft, which is calculated from the difference between
+        # name and realname.
+        erealname = list(ename)
+        erealname.remove('/')
+        erealname.insert(0, realname.split(name)[0] + '/')
+        
         basename = ename[-1]
         #log('add: %r %r\n' % (basename, name))
         flags = IX_EXISTS
@@ -528,7 +542,7 @@ class Writer:
             e.gitmode = gitmode
             e.sha = sha
             e.flags = flags
-        self._add(ename, e)
+        self._add(ename, erealname, e)
 
     def add_ixentry(self, e):
         e.children_ofs = e.children_n = 0
