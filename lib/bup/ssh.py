@@ -1,7 +1,7 @@
 """SSH connection.
 Connect to a remote host via SSH and execute a command on the host.
 """
-import sys, os, re, subprocess
+import sys, os, re, subprocess, shlex
 from bup import helpers, path
 
 
@@ -33,7 +33,8 @@ def connect(rhost, port, subcmd, sshcmd=None):
             if port:
                 argv.extend(('-p', port))
         else:
-            argv = sshcmd.split()
+            argv = shlex.split(sshcmd)
+                    
         
         argv.extend((rhost, '--', cmd.strip()))
         #helpers.log('argv is: %r\n' % argv)
