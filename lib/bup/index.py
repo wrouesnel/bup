@@ -546,7 +546,7 @@ class Writer:
 
     def add_ixentry(self, e):
         e.children_ofs = e.children_n = 0
-        self._add(pathsplit(e.name), e)
+        self._add(pathsplit(e.name), pathsplit(e.realname), e)
 
     def new_reader(self):
         self.flush()
