@@ -51,7 +51,11 @@ def check_index(reader):
 def graftpath(graft_points, path):
     for (oldpath, newpath) in graft_points:
         if path.startswith(oldpath):
-            result = os.path.join(newpath, path.split(oldpath)[1])
+            # eat any preceding slash in the path head
+            pathsuffix = path.split(oldpath)[1]
+            if pathsuffix.startswith('/'):
+                pathsuffix = pathsuffix[1:]
+            result = os.path.join(newpath, pathsuffix)
             return result
     return path
 
