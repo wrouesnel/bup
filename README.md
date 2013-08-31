@@ -9,7 +9,7 @@ To submit code to bup, a mailing list workflow is used - the mailing
 list is bup-list@googlegroups.com
 
 Current development branches:
-	* relativistic-indexing
+	* index-grafts
 	Support for highly graftable indexes to enable easy use of bup
 	with relocatable roots, or directory trees with subtle differences
 	(i.e. when backing up home directories across Windows and Linux)
