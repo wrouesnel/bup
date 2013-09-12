@@ -81,7 +81,8 @@ def ungraftpath(graft_points, path):
     return path
 
 def clear_index(indexfile):
-    indexfiles = [indexfile, indexfile + '.meta', indexfile + '.hlink']
+    indexfiles = [indexfile, indexfile + '.meta', indexfile + '.hlink',
+                  indexfile + '.grafts']
     for indexfile in indexfiles:
         path = git.repo(indexfile)
         try:
