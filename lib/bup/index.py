@@ -27,70 +27,6 @@ IX_SHAMISSING = 0x2000    # the stored sha1 object doesn't seem to exist
 class Error(Exception):
     pass
 
-# GraftsReader and Writer are abstractions to manage the database of grafts
-# efficiently. At the moment the format is [ ([oldpath element list], string) ]
-# We keep the list sorted in order of length of oldpath element list.
-class GraftsReader:    
-    def __init__(self, filename):
-        self._grafts = []
-        try:
-            self._file = open(filename, 'rb')
-            self._grafts = cPickle.Unpickler(self._file).load()
-        except IOError:
-            self._file = None
-    
-    def close(self):
-        if self._file:
-            self._file.close()
-    
-    def __del__(self):
-        self.close()
-    
-    # Find a graft point that matches the given path
-    # Return blank graft point (no graft) if no match
-    def match(self, path):
-        for (oldpath,newpath) in self._grafts:
-            if path.startswith(oldpath):
-                return (oldpath,newpath)
-        
-        # Return the default graft (this is a null graft)
-        return ('/', '/')
-
-class GraftsWriter:
-    def __init__(self, filename):
-        self.filename = filename
-        (ffd,self.tmpname) = tempfile.mkstemp('.tmp', filename, dir)
-        self._file = os.fdopen(ffd, 'wb', 65536)
-    
-        self._grafts = []
-    
-    def __del__(self):
-        self.abort()
-
-    def abort(self):
-        f = self.f
-        self.f = None
-        if f:
-            f.close()
-            os.unlink(self.tmpname)
-    
-    def close(self):
-        # Finalize object on close only.
-        cPickle.Pickler(self._file, protocol=0).dump(self._graft_points)
-        
-        self._file.close()
-        self._file = None
-        
-        os.rename(self.tmpname, self.filename)
-        
-    def add(self, oldpath, newpath):
-        ecount = oldpath.count(os.path.sep)
-        for i in len(self._grafts):
-            if self._grafts[i][0].count(os.path.sep) < len(ecount):
-                self._grafts.insert(i, (oldpath,newpath))
-                return
-        self._grafts.append(oldpath,newpath)
-
 class MetaStoreReader:
     def __init__(self, filename):
         self._file = open(filename, 'rb')
@@ -147,7 +83,7 @@ class MetaStoreWriter:
         self.close()
 
     def store(self, metadata):
-        meta_encoded = metadata.encode(include_path=False)
+        meta_encoded = metadata.encode(include_path=True)
         ofs = self._offsets.get(meta_encoded)
         if ofs:
             return ofs

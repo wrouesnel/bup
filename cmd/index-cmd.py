@@ -81,8 +81,7 @@ def ungraftpath(graft_points, path):
     return path
 
 def clear_index(indexfile):
-    indexfiles = [indexfile, indexfile + '.meta', indexfile + '.hlink',
-                  indexfile + '.grafts']
+    indexfiles = [indexfile, indexfile + '.meta', indexfile + '.hlink']
     for indexfile in indexfiles:
         path = git.repo(indexfile)
         try:
@@ -101,9 +100,6 @@ def update_index(top, excluded_paths, exclude_rxs, new_graft_points):
     msw = index.MetaStoreWriter(indexfile + '.meta')
     wi = index.Writer(indexfile, msw, tmax)
  
-     # Get the list of graft points previously used
-    old_graft_points = index.GraftsReader(indexfile + '.grafts').get()
- 
     tstart = int(time.time()) * 10**9
 
     hlinks = hlinkdb.HLinkDB(indexfile + '.hlink')
@@ -116,39 +112,38 @@ def update_index(top, excluded_paths, exclude_rxs, new_graft_points):
     total = 0
     bup_dir = os.path.abspath(git.repo())
     for top, top_path in tops:
-        # convert the new path to a path likely to be in the index
-        old_top = ungraftpath(old_graft_points, 
-                              graftpath(new_graft_points, top))
-        rig = IterHelper(ri.iter(name=old_top))
+        # graft the real top to bup top
+        grafted_top = graftpath(new_graft_points, top)    
+          
+        rig = IterHelper(ri.iter(name=grafted_top))
         for (path,pst) in drecurse.recursive_dirlist([top], xdev=opt.xdev,
                                                      bup_dir=bup_dir,
                                                      excluded_paths=excluded_paths,
                                                      exclude_rxs=exclude_rxs):
+            # convert path to bup archive form
+            grafted_path = graftpath(new_graft_points, path)
             if opt.verbose>=2 or (opt.verbose==1 and stat.S_ISDIR(pst.st_mode)):
-                sys.stdout.write('%s\n' % path)
+                sys.stdout.write('%s -> %s\n' % (path, grafted_path))
                 sys.stdout.flush()
                 qprogress('Indexing: %d\r' % total)
             elif not (total % 128):
                 qprogress('Indexing: %d\r' % total)
             total += 1
-            # convert path to the previous representation, and then see if it's
-            # already in the index.
-            old_path = ungraftpath(old_graft_points, 
-                                  graftpath(new_graft_points, path))
-            while rig.cur and rig.cur.name > old_path:  # deleted paths
-                #if rig.cur.exists():
-                #    rig.cur.set_deleted()
-                #    rig.cur.repack()
-                # Remove hard link, don't bother writing to new index 
+            while rig.cur and rig.cur.name > grafted_path:  # deleted paths
+                if rig.cur.exists():
+                    rig.cur.set_deleted()
+                    rig.cur.repack() 
                 if rig.cur.nlink > 1 and not stat.S_ISDIR(rig.cur.mode):
                     hlinks.del_path(rig.cur.name)
                 rig.next()
-            if rig.cur and rig.cur.name == old_path:    # paths that already existed
+            if rig.cur and rig.cur.name == grafted_path:    # paths that already existed
                 if not stat.S_ISDIR(rig.cur.mode) and rig.cur.nlink > 1:
                     hlinks.del_path(rig.cur.name)
                 if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
+                    # TODO: should we be using the grafted path?
                     hlinks.add_path(path, pst.st_dev, pst.st_ino)
-                meta = metadata.from_path(path, statinfo=pst)
+                meta = metadata.from_path(path, statinfo=pst,
+                                          archive_path=path)
                 # Clear these so they don't bloat the store -- they're
                 # already in the index (since they vary a lot and they're
                 # fixed length).  If you've noticed "tmax", you might
@@ -165,42 +160,27 @@ def update_index(top, excluded_paths, exclude_rxs, new_graft_points):
                 meta_ofs = msw.store(meta)
                 rig.cur.from_stat(pst, meta_ofs, tstart,
                                   check_device=opt.check_device)
-                
-                # Would the old index obj be hash invalid against the
-                # filesystem obj?
                 if not (rig.cur.flags & index.IX_HASHVALID):
-                    #(rig.cur.gitmode, rig.cur.sha) = hashgen(path)
-                    #rig.cur.flags |= index.IX_HASHVALID
-                    wi.add(path, pst, meta_ofs, hashgen = hashgen)
-                else: # object is unchanged
-                    if opt.fake_invalid:
-                        wi.add(path, pst, meta_ofs, hashgen = hashgen)
-                    else: # copy hash
-                        sha = rig.cur.sha
-                        wi.add(path, pst, meta_ofs, 
-                               hashgen = lambda name: (GIT_MODE_FILE, sha))
-                    
-                #if opt.fake_invalid:
-                #    rig.cur.invalidate()
-                #rig.cur.repack()
-                
+                    if hashgen:
+                        (rig.cur.gitmode, rig.cur.sha) = hashgen(path)
+                        rig.cur.flags |= index.IX_HASHVALID
+                if opt.fake_invalid:
+                    rig.cur.invalidate()
+                rig.cur.repack()
                 rig.next()
             else:  # new paths
-                meta = metadata.from_path(path, statinfo=pst)
+                meta = metadata.from_path(path, statinfo=pst, archive_path=path)
                 # See same assignment to 0, above, for rationale.
                 meta.atime = meta.mtime = meta.ctime = 0
                 meta_ofs = msw.store(meta)
-                wi.add(path, pst, meta_ofs, hashgen = hashgen)
+                wi.add(grafted_path, pst, meta_ofs, hashgen = hashgen)
                 if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
+                    # TODO: should we be using the grafted path?
                     hlinks.add_path(path, pst.st_dev, pst.st_ino)
 
     progress('Indexing: %d, done.\n' % total)
     
     hlinks.prepare_save()
-
-    # TODO: is this the right place to do this?
-    # write out the new set of graft points
-    index.GraftsWriter(indexfile + '.grafts').set(new_graft_points)
 
     if ri.exists():
         ri.save()
