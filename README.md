@@ -57,4 +57,4 @@ $ bup index --regraft /srv/mysite.com=/
 $ bup save -N www /
 ```
 
-**NOTE**: unlike the --graft option, --regraft does not need or respect the --no-check-device flag since it only edits files which would be updated anyway.
+**NOTE**: --regraft respects the --no-check-device flag but generally shouldn't need it since the files it scans will be marked for upload anyway.
