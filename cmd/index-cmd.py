@@ -2,6 +2,7 @@
 
 import sys, stat, time, os, errno, re
 from bup import metadata, options, git, index, drecurse, hlinkdb
+from bup import xstat
 from bup.helpers import *
 from bup.hashsplit import GIT_MODE_TREE, GIT_MODE_FILE
 
@@ -92,6 +93,57 @@ def clear_index(indexfile):
             if e.errno != errno.ENOENT:
                 raise
 
+def regraft_index(new_graft_points):
+    ri = index.Reader(indexfile)
+    hlinks = hlinkdb.HLinkDB(indexfile + '.hlink')
+    msr = index.MetaStoreReader(indexfile + '.meta')
+    msw = index.MetaStoreWriter(indexfile + '.meta')
+
+    tstart = int(time.time()) * 10**9
+
+    bup_dir = os.path.abspath(git.repo())
+    total = 0
+    
+    # Sort graft points by bup archive path in order of length
+    new_graft_points.sort(reverse=True, key=lambda graft: graft[1])
+
+    # Iterate on each graft point separately    
+    for (fsprefix, bupprefix) in new_graft_points:
+        rig = IterHelper(ri.iter(name=bupprefix))
+        while rig.cur:
+            # Only regraft entries which would be updated anyway. This
+            # saves a whole lot of disk IO polling for metadata.
+            if rig.cur.flags & index.IX_HASHVALID:
+                # FIXME: what do we do about hardlinks ???
+                # Ungrafting should give us a new real path
+                newrealpath = ungraftpath([(fsprefix,bupprefix)], 
+                                          rig.cur.name)
+                # Log some progress
+                if opt.verbose>=2:
+                    sys.stdout.write('%s -> %s\n' % 
+                                     (rig.cur.name, newrealpath))
+                    sys.stdout.flush()
+                    qprogress('Regrafting: %d\r' % total)
+                elif not (total % 128):
+                    qprogress('Regrafting: %d\r' % total)
+                total += 1
+                # update HLinkDB
+                if not stat.S_ISDIR(rig.cur.mode) and rig.cur.nlink > 1:
+                    hlinks.del_path(rig.cur.name)
+                if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
+                    # TODO: should we be using the grafted path?
+                    hlinks.add_path(path, pst.st_dev, pst.st_ino)
+                
+                # Get metadata
+                pst = xstat.lstat(newrealpath)
+                meta = metadata.from_path(newrealpath, statinfo=pst, 
+                                          archive_path=newrealpath)
+                # Do the regraft
+                meta_ofs = msw.store(meta)
+                rig.cur.from_stat(pst, meta_ofs, tstart,
+                                  check_device=opt.check_device)
+                rig.cur.repack()                
+            rig.next()
 
 def update_index(top, excluded_paths, exclude_rxs, new_graft_points):
     # tmax and start must be epoch nanoseconds.
@@ -219,6 +271,7 @@ s,status   print each filename with a status char (A/M/D) (implies -p)
 u,update   recursively update the index entries for the given file/dir names (default if no mode is specified)
 check      carefully check index file integrity
 clear      clear the index
+regraft    remap modified files real filesystem paths according to new graft points (needs --graft)
  Options:
 graft=    a graft point of *old_path*=*new_path* (can be used more then once)
 H,hash     print the hash for each object next to its name
@@ -241,7 +294,8 @@ if not (opt.modified or \
         opt.status or \
         opt.update or \
         opt.check or \
-        opt.clear):
+        opt.clear or \
+        opt.regraft):
     opt.update = 1
 if (opt.fake_valid or opt.fake_invalid) and not opt.update:
     o.fatal('--fake-{in,}valid are meaningless without -u')
@@ -249,6 +303,11 @@ if opt.fake_valid and opt.fake_invalid:
     o.fatal('--fake-valid is incompatible with --fake-invalid')
 if opt.clear and opt.indexfile:
     o.fatal('cannot clear an external index (via -f)')
+
+if opt.regraft and opt.update:
+    o.fatal('--regraft is incompatible with update')
+if opt.regraft and extra:
+    o.fatal('--regraft does not accept a path')
 
 # FIXME: remove this once we account for timestamp races, i.e. index;
 # touch new-file; index.  It's possible for this to happen quickly
@@ -288,6 +347,9 @@ if opt.graft:
 
 graft_points.sort(reverse=True)
 
+if opt.regraft:
+    regraft_index(graft_points)
+    
 if opt.update:
     if not extra:
         o.fatal('update mode (-u) requested but no paths given')
