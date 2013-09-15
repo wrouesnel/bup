@@ -20,4 +20,5 @@ out2[tc]
 nbproject
 /t/sampledata/[bc]
 /t/sampledata/etc
+*.orig
 /t/tmp/
