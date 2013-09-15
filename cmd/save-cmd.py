@@ -227,6 +227,9 @@ if opt.progress:
 # FIXME: Detect/handle strip/graft name collisions (other than root),
 # i.e. if '/foo/bar' and '/bar' both map to '/'.
 
+# FIXME: due to the way indexed grafts work, root gets mapped by default to
+# empty metadata. This should be ok, since really root shouldn't default to
+# pulling in the real FS's metadata anyway if it wasn't explicitely indexed.
 def getrealpath(msr, ent):
     meta = msr.metadata_at(ent.meta_ofs)
     if meta is not None:
