@@ -100,7 +100,27 @@ does, due to the accommodations described above.
     filename.  Implies `-p`.  The codes mean, respectively,
     that a file is marked in the index as added, modified,
     deleted, or unchanged since the last backup.
-    
+
+\--regraft
+:	change the real path of files marked as modified to match
+	options supplied by the --graft parameter. This option can
+	be used to quickly update index locations when files may be
+	marked as modified from one filesystem, but uploaded from
+	another (i.e. a snapshotted volume).
+	
+	Example:
+	
+	Index a home directory:
+		
+		$ bup index -um --graft /home/user=/ /home/user
+		
+	Regraft the home directory to the real location it will be 
+	saved from:
+		
+		$ bup index --regraft --graft /home/user/snapshot/today=/
+		
+	Then save:
+		$ bup save -N home /  
 
 # OPTIONS
 
@@ -132,7 +152,7 @@ does, due to the accommodations described above.
     Backup a home directory:
     
         $ bup index -um --graft /home/user=/ /home/user
-        $ bup save -n homedirectory /home/user
+        $ bup save -n homedirectory /
 
     Relocate the home directory:
     
@@ -142,7 +162,7 @@ does, due to the accommodations described above.
     backup:
     
         $ bup index -um --graft /home/different_user=/ /home/user2
-        $ bup save -n homedirectory /home/user2
+        $ bup save -n homedirectory /
 
 -H, \--hash
 :   for each file printed, prepend the most recently
