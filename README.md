@@ -53,7 +53,7 @@ Example (accomplishing the same as the two runs with --graft above):
 ```bash
 $ bup index --graft /var/www=/ /var/www
 $ mv /var/www/* /srv/mysite.com/*
-$ bup index --regraft /srv/mysite.com=/
+$ bup index --regraft --graft /srv/mysite.com=/
 $ bup save -N www /
 ```
 
