@@ -133,7 +133,7 @@ def test_metadata_method():
         top = vfs.RefList(None)
         n = top.lresolve('/test/latest' + realpath(data_path))
         m = n.metadata()
-        WVPASS(m.mtime == 0)
+        WVPASS(m.mtime == test_time2)
         WVPASS(len(n.subs()) == 2)
         WVPASS(n.name == 'foo')
         WVPASS(set([x.name for x in n.subs()]) == set(['file', 'symlink']))

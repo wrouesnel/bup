@@ -318,7 +318,13 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
     # tuples need to be exchanged for a real path against the entity, but
     # only where no other grafting has been done.
     # FIXME: integrate this with the dirp calculators above somehow?
-    entcur = ent
+    
+    # go up one level immediately to get the directory entry
+    if file:
+        entcur = ent.parent
+    else:
+        entcur = ent
+    
     for i,e in reversed(list(enumerate(dirp))):
         # If no more real paths then stop trying to match them
         if e[1] is None:
