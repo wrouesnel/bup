@@ -375,8 +375,7 @@ if opt['print'] or opt.status or opt.modified:
             line += ent.sha.encode('hex') + ' '
         if opt.long:
             line += "%7s %7s " % (oct(ent.mode), oct(ent.gitmode))
-        print line + "%-70s => %s" % ((ent.name or './'), 
-                                      graftpath(graft_points, ent.name))
+        print line + (name or './')
 
 if opt.check and (opt['print'] or opt.status or opt.modified or opt.update):
     log('check: starting final check.\n')
