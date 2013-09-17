@@ -9,7 +9,8 @@ bup-index - print and/or update the bup filesystem index
 # SYNOPSIS
 
 bup index \<-p|-m|-s|-u\> [-H] [-l] [-x] [\--fake-valid] [\--no-check-device]
-[\--fake-invalid] [\--check] [\--clear] [-f *indexfile*] [\--exclude *path*]
+[\--fake-invalid] [\--check] [\--clear] [\--regraft] 
+[\--graft \<*oldfile*=*newfile|...\>] [-f *indexfile*] [\--exclude *path*] 
 [\--exclude-from *filename*] [\--exclude-rx *pattern*] [-v] \<filenames...\>
 
 # DESCRIPTION
