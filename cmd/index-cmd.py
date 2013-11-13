@@ -48,6 +48,37 @@ def check_index(reader):
         raise
     log('check: passed.\n')
 
+# try and convert real path to bup path based on graft_points
+# note: expects absolute paths to be in graft_points
+def graftpath(graft_points, path):
+    for (oldpath, newpath) in graft_points:
+        assert(os.path.isabs(oldpath))
+        assert(os.path.isabs(newpath))
+        
+        if path.startswith(oldpath):
+            pathsuffix = path[len(oldpath):]
+            # eat preceding sep
+            if pathsuffix[:1] == os.path.sep:
+                pathsuffix = pathsuffix[1:]
+            result = os.path.join(newpath, pathsuffix)
+            return result
+    return path
+
+# try convert bup path to real path based on graft points
+# note: expects absolute paths to be in graft_points
+def ungraftpath(graft_points, path):
+    for (oldpath, newpath) in graft_points:
+        assert(os.path.isabs(oldpath))
+        assert(os.path.isabs(newpath))
+        
+        if path.startswith(newpath):
+            pathsuffix = path[len(newpath):]
+            # eat preceding sep
+            if pathsuffix[:1] == os.path.sep:
+                pathsuffix = pathsuffix[1:]
+            result = os.path.join(oldpath, pathsuffix)
+            return result
+    return path
 
 def clear_index(indexfile):
     indexfiles = [indexfile, indexfile + '.meta', indexfile + '.hlink']
@@ -62,13 +93,16 @@ def clear_index(indexfile):
                 raise
 
 
-def update_index(top, excluded_paths, exclude_rxs):
+def update_index(top, excluded_paths, exclude_rxs, new_graft_points):
     # tmax and start must be epoch nanoseconds.
     tmax = (time.time() - 1) * 10**9
     ri = index.Reader(indexfile)
     msw = index.MetaStoreWriter(indexfile + '.meta')
     wi = index.Writer(indexfile, msw, tmax)
-    rig = IterHelper(ri.iter(name=top))
+ 
+     # Get the list of graft points previously used
+    old_graft_points = index.GraftsReader(indexfile + '.grafts').get()
+ 
     tstart = int(time.time()) * 10**9
 
     hlinks = hlinkdb.HLinkDB(indexfile + '.hlink')
@@ -80,66 +114,92 @@ def update_index(top, excluded_paths, exclude_rxs):
 
     total = 0
     bup_dir = os.path.abspath(git.repo())
-    for (path,pst) in drecurse.recursive_dirlist([top], xdev=opt.xdev,
-                                                 bup_dir=bup_dir,
-                                                 excluded_paths=excluded_paths,
-                                                 exclude_rxs=exclude_rxs):
-        if opt.verbose>=2 or (opt.verbose==1 and stat.S_ISDIR(pst.st_mode)):
-            sys.stdout.write('%s\n' % path)
-            sys.stdout.flush()
-            qprogress('Indexing: %d\r' % total)
-        elif not (total % 128):
-            qprogress('Indexing: %d\r' % total)
-        total += 1
-        while rig.cur and rig.cur.name > path:  # deleted paths
-            if rig.cur.exists():
-                rig.cur.set_deleted()
-                rig.cur.repack()
+    for top, top_path in tops:
+        # convert the new path to a path likely to be in the index
+        old_top = ungraftpath(old_graft_points, 
+                              graftpath(new_graft_points, top))
+        rig = IterHelper(ri.iter(name=old_top))
+        for (path,pst) in drecurse.recursive_dirlist([top], xdev=opt.xdev,
+                                                     bup_dir=bup_dir,
+                                                     excluded_paths=excluded_paths,
+                                                     exclude_rxs=exclude_rxs):
+            if opt.verbose>=2 or (opt.verbose==1 and stat.S_ISDIR(pst.st_mode)):
+                sys.stdout.write('%s\n' % path)
+                sys.stdout.flush()
+                qprogress('Indexing: %d\r' % total)
+            elif not (total % 128):
+                qprogress('Indexing: %d\r' % total)
+            total += 1
+            # convert path to the previous representation, and then see if it's
+            # already in the index.
+            old_path = ungraftpath(old_graft_points, 
+                                  graftpath(new_graft_points, path))
+            while rig.cur and rig.cur.name > old_path:  # deleted paths
+                #if rig.cur.exists():
+                #    rig.cur.set_deleted()
+                #    rig.cur.repack()
+                # Remove hard link, don't bother writing to new index 
                 if rig.cur.nlink > 1 and not stat.S_ISDIR(rig.cur.mode):
                     hlinks.del_path(rig.cur.name)
-            rig.next()
-        if rig.cur and rig.cur.name == path:    # paths that already existed
-            if not stat.S_ISDIR(rig.cur.mode) and rig.cur.nlink > 1:
-                hlinks.del_path(rig.cur.name)
-            if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
-                hlinks.add_path(path, pst.st_dev, pst.st_ino)
-            meta = metadata.from_path(path, statinfo=pst)
-            # Clear these so they don't bloat the store -- they're
-            # already in the index (since they vary a lot and they're
-            # fixed length).  If you've noticed "tmax", you might
-            # wonder why it's OK to do this, since that code may
-            # adjust (mangle) the index mtime and ctime -- producing
-            # fake values which must not end up in a .bupm.  However,
-            # it looks like that shouldn't be possible:  (1) When
-            # "save" validates the index entry, it always reads the
-            # metadata from the filesytem. (2) Metadata is only
-            # read/used from the index if hashvalid is true. (3) index
-            # always invalidates "faked" entries, because "old != new"
-            # in from_stat().
-            meta.ctime = meta.mtime = meta.atime = 0
-            meta_ofs = msw.store(meta)
-            rig.cur.from_stat(pst, meta_ofs, tstart,
-                              check_device=opt.check_device)
-            if not (rig.cur.flags & index.IX_HASHVALID):
-                if hashgen:
-                    (rig.cur.gitmode, rig.cur.sha) = hashgen(path)
-                    rig.cur.flags |= index.IX_HASHVALID
-            if opt.fake_invalid:
-                rig.cur.invalidate()
-            rig.cur.repack()
-            rig.next()
-        else:  # new paths
-            meta = metadata.from_path(path, statinfo=pst)
-            # See same assignment to 0, above, for rationale.
-            meta.atime = meta.mtime = meta.ctime = 0
-            meta_ofs = msw.store(meta)
-            wi.add(path, pst, meta_ofs, hashgen = hashgen)
-            if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
-                hlinks.add_path(path, pst.st_dev, pst.st_ino)
+                rig.next()
+            if rig.cur and rig.cur.name == old_path:    # paths that already existed
+                if not stat.S_ISDIR(rig.cur.mode) and rig.cur.nlink > 1:
+                    hlinks.del_path(rig.cur.name)
+                if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
+                    hlinks.add_path(path, pst.st_dev, pst.st_ino)
+                meta = metadata.from_path(path, statinfo=pst)
+                # Clear these so they don't bloat the store -- they're
+                # already in the index (since they vary a lot and they're
+                # fixed length).  If you've noticed "tmax", you might
+                # wonder why it's OK to do this, since that code may
+                # adjust (mangle) the index mtime and ctime -- producing
+                # fake values which must not end up in a .bupm.  However,
+                # it looks like that shouldn't be possible:  (1) When
+                # "save" validates the index entry, it always reads the
+                # metadata from the filesytem. (2) Metadata is only
+                # read/used from the index if hashvalid is true. (3) index
+                # always invalidates "faked" entries, because "old != new"
+                # in from_stat().
+                meta.ctime = meta.mtime = meta.atime = 0
+                meta_ofs = msw.store(meta)
+                rig.cur.from_stat(pst, meta_ofs, tstart,
+                                  check_device=opt.check_device)
+                
+                # Would the old index obj be hash invalid against the
+                # filesystem obj?
+                if not (rig.cur.flags & index.IX_HASHVALID):
+                    #(rig.cur.gitmode, rig.cur.sha) = hashgen(path)
+                    #rig.cur.flags |= index.IX_HASHVALID
+                    wi.add(path, pst, meta_ofs, hashgen = hashgen)
+                else: # object is unchanged
+                    if opt.fake_invalid:
+                        wi.add(path, pst, meta_ofs, hashgen = hashgen)
+                    else: # copy hash
+                        sha = rig.cur.sha
+                        wi.add(path, pst, meta_ofs, 
+                               hashgen = lambda name: (GIT_MODE_FILE, sha))
+                    
+                #if opt.fake_invalid:
+                #    rig.cur.invalidate()
+                #rig.cur.repack()
+                
+                rig.next()
+            else:  # new paths
+                meta = metadata.from_path(path, statinfo=pst)
+                # See same assignment to 0, above, for rationale.
+                meta.atime = meta.mtime = meta.ctime = 0
+                meta_ofs = msw.store(meta)
+                wi.add(path, pst, meta_ofs, hashgen = hashgen)
+                if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
+                    hlinks.add_path(path, pst.st_dev, pst.st_ino)
 
     progress('Indexing: %d, done.\n' % total)
     
     hlinks.prepare_save()
+
+    # TODO: is this the right place to do this?
+    # write out the new set of graft points
+    index.GraftsWriter(indexfile + '.grafts').set(new_graft_points)
 
     if ri.exists():
         ri.save()
@@ -156,7 +216,7 @@ def update_index(top, excluded_paths, exclude_rxs):
             for e in index.merge(ri, wr):
                 # FIXME: shouldn't we remove deleted entries eventually?  When?
                 mi.add_ixentry(e)
-
+            
             ri.close()
             mi.close()
             wr.close()
@@ -177,8 +237,9 @@ m,modified print only added/deleted/modified files (implies -p)
 s,status   print each filename with a status char (A/M/D) (implies -p)
 u,update   recursively update the index entries for the given file/dir names (default if no mode is specified)
 check      carefully check index file integrity
-clear      clear the default index
+clear      clear the index
  Options:
+graft=    a graft point of *old_path*=*new_path* (can be used more then once)
 H,hash     print the hash for each object next to its name
 l,long     print more information about each file
 no-check-device don't invalidate an entry if the containing device changes
@@ -232,11 +293,24 @@ excluded_paths = parse_excludes(flags, o.fatal)
 exclude_rxs = parse_rx_excludes(flags, o.fatal)
 paths = index.reduce_paths(extra)
 
+graft_points = []
+if opt.graft:
+    for (option, parameter) in flags:
+        if option == "--graft":
+            splitted_parameter = parameter.split('=')
+            if len(splitted_parameter) != 2:
+                o.fatal("a graft point must be of the form old_path=new_path")
+            old_path, new_path = splitted_parameter
+            if not (old_path and new_path):
+                o.fatal("a graft point cannot be empty")
+            graft_points.append((realpath(old_path), new_path))
+
+graft_points.sort(reverse=True)
+
 if opt.update:
     if not extra:
         o.fatal('update mode (-u) requested but no paths given')
-    for (rp,path) in paths:
-        update_index(rp, excluded_paths, exclude_rxs)
+    update_index(rp, excluded_paths, exclude_rxs, graft_points)
 
 if opt['print'] or opt.status or opt.modified:
     for (name, ent) in index.Reader(indexfile).filter(extra or ['']):
@@ -258,7 +332,8 @@ if opt['print'] or opt.status or opt.modified:
             line += ent.sha.encode('hex') + ' '
         if opt.long:
             line += "%7s %7s " % (oct(ent.mode), oct(ent.gitmode))
-        print line + (name or './')
+        print line + "%-70s => %s" % ((ent.name or './'), 
+                                      graftpath(graft_points, ent.name))
 
 if opt.check and (opt['print'] or opt.status or opt.modified or opt.update):
     log('check: starting final check.\n')

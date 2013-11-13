@@ -186,6 +186,9 @@ if not os.access(indexfile + '.meta', os.W_OK|os.R_OK):
 msr = index.MetaStoreReader(indexfile + '.meta')
 hlink_db = hlinkdb.HLinkDB(indexfile + '.hlink')
 
+# append graft points from grafts file, if it exists.
+graft_points.extend(index.GraftsReader(indexfile + '.grafts').get())
+
 def already_saved(ent):
     return ent.is_valid() and w.exists(ent.sha) and ent.sha
 

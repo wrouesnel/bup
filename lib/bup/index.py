@@ -1,4 +1,4 @@
-import metadata, os, stat, struct, tempfile
+import metadata, os, stat, struct, tempfile, cPickle
 from bup import xstat
 from bup.helpers import *
 
@@ -27,6 +27,41 @@ IX_SHAMISSING = 0x2000    # the stored sha1 object doesn't seem to exist
 class Error(Exception):
     pass
 
+class GraftsReader:    
+    def __init__(self, filename):
+        try:
+            self._file = open(filename, 'rb')
+            self._grafts = cPickle.Unpickler(self._file).load()
+        except IOError:
+            self._grafts = []
+            self._file = None
+    
+    def close(self):
+        if self._file:
+            self._file.close()
+    
+    def __del__(self):
+        self.close()
+    
+    def get(self):
+        return self._grafts
+
+class GraftsWriter:
+    def __init__(self, filename):
+        self._file = open(filename, 'wb')
+    
+    def close(self):
+        # Finalize object on close only.
+        cPickle.Pickler(self._file, protocol=0).dump(self._graft_points)
+        
+        self._file.close()
+        self._file = None
+    
+    def __del__(self):
+        self.close()
+        
+    def set(self, graft_points):
+        self._graft_points = graft_points
 
 class MetaStoreReader:
     def __init__(self, filename):

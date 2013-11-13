@@ -104,6 +104,46 @@ does, due to the accommodations described above.
 
 # OPTIONS
 
+\--graft *oldpath*=*newpath*
+:   treat files indexed under *oldpath* as though they were
+    really under *newpath* in the index. This is useful for
+    snapshot backups where the path-prefix of a directory
+    tree may change from backup to backup to prevent bup
+    rereading file contents everytime. If *oldpath* is given
+    as a relative path, it will be evaluated against the
+    current working directory. *newpath* is always treated
+    as an absolute path.
+    
+    Note: --graft will cause `bup index` to treat any file
+    under *oldpath* which maps to an existing entry in the
+    index under *newpath* as being the same file, and will
+    only compare metadata to determine if it should be backed
+    up again. In the unlikely event that two files have
+    identical metadata but dissimilar content, using --graft
+    will cause `bup index` to miss the change. 
+    
+    Usually this option should be used with --no-check-device to 
+    avoid spurious update detection (since a mounted snapshot
+    will frequently have a different device id to the normal
+    filesystem).
+    
+    Example:
+    
+    Backup a home directory:
+    
+        $ bup index -um --graft /home/user=/ /home/user
+        $ bup save -n homedirectory /home/user
+
+    Relocate the home directory:
+    
+        $ mv /home/user /home/user2
+
+    Only backup files which have actually changed since the last
+    backup:
+    
+        $ bup index -um --graft /home/different_user=/ /home/user2
+        $ bup save -n homedirectory /home/user2
+
 -H, \--hash
 :   for each file printed, prepend the most recently
     recorded hash code.  The hash code is normally
