@@ -295,7 +295,8 @@ class Metadata:
             or stat.S_ISSOCK(self.mode) \
             or stat.S_ISLNK(self.mode)
 
-    def _create_via_common_rec(self, path, create_symlinks=True):
+    def _create_via_common_rec(self, path, create_symlinks=True,
+                               directory_merge=False):
         if not self.mode:
             raise ApplyError('no metadata - cannot create path ' + path)
 
@@ -310,7 +311,8 @@ class Metadata:
         if st:
             if stat.S_ISDIR(st.st_mode):
                 try:
-                    os.rmdir(path)
+                    if not directory_merge:
+                        os.rmdir(path)
                 except OSError, e:
                     if e.errno in (errno.ENOTEMPTY, errno.EEXIST):
                         msg = 'refusing to overwrite non-empty dir ' + path
@@ -325,7 +327,10 @@ class Metadata:
             os.close(fd)
         elif stat.S_ISDIR(self.mode):
             assert(self._recognized_file_type())
-            os.mkdir(path, 0700)
+            # don't try and make directories if we're merging content,
+            # but do try and make them if they don't exist anyway
+            if not directory_merge or not st:
+                os.mkdir(path, 0700)
         elif stat.S_ISCHR(self.mode):
             assert(self._recognized_file_type())
             os.mknod(path, 0600 | stat.S_IFCHR, self.rdev)
@@ -787,8 +792,9 @@ class Metadata:
     def isdir(self):
         return stat.S_ISDIR(self.mode)
 
-    def create_path(self, path, create_symlinks=True):
-        self._create_via_common_rec(path, create_symlinks=create_symlinks)
+    def create_path(self, path, create_symlinks=True, directory_merge=False):
+        self._create_via_common_rec(path, create_symlinks=create_symlinks,
+                                    directory_merge=directory_merge)
 
     def apply_to_path(self, path=None, restore_numeric_ids=False):
         # apply metadata to path -- file must exist

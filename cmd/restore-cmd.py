@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-import copy, errno, sys, stat, re
-from bup import options, git, metadata, vfs
+import copy, errno, sys, stat, re, os
+from bup import options, git, metadata, vfs, xstat
 from bup.helpers import *
 from bup._helpers import write_sparsely
 
@@ -18,6 +18,8 @@ map-group=  given OLD=NEW, restore OLD group as NEW group
 map-uid=    given OLD=NEW, restore OLD uid as NEW uid
 map-gid=    given OLD=NEW, restore OLD gid as NEW gid
 q,quiet     don't show progress meter
+overwrite-files=    prompt before overwriting (yes/no)
+directory-merge=    prompt before merging directory contents (yes/no)
 """
 
 total_restored = 0
@@ -61,7 +63,7 @@ def print_info(n, fullname):
 
 def create_path(n, fullname, meta):
     if meta:
-        meta.create_path(fullname)
+        meta.create_path(fullname, directory_merge=True)
     else:
         # These fallbacks are important -- meta could be null if, for
         # example, save created a "fake" item, i.e. a new strip/graft
@@ -165,6 +167,51 @@ def write_file_content(fullname, n):
     finally:
         outf.close()
 
+def overwrite_checks_success(fullname, n):
+    """Determine if the path should be overwritten (possibly by
+    prompting the user)
+    """
+    global opt
+    def overwrite_prompt(prompt, toggle_parameter):
+        response = None
+        while True:
+            print '%s (Yes/Always/No/neVer)?' % prompt
+            sys.stdout.flush()
+            raw_response = raw_input('')
+            response = raw_response.strip().lower()
+            if response in ['yes','y']:
+                return True
+            elif response in ['always','a']:
+                setattr(opt, toggle_parameter, 'yes') 
+                return True
+            elif response in ['no','n']:
+                return False
+            elif response in ['never','v']:
+                setattr(opt, toggle_parameter, 'no')
+                return False
+            else:
+                print "Invalid selection.\n"
+                sys.stdout.flush()
+    # Does path exist?
+    if not os.path.exists(fullname):
+        # No - proceed without further checks.
+        return True
+    
+    # Automatic directory merge?
+    if stat.S_ISDIR(n.mode):
+        if opt.directory_merge == 'no':
+            return False
+        if opt.directory_merge == 'yes':
+            return True
+        return overwrite_prompt("Merge %s content into existing directory?" 
+                                % fullname, "directory_merge")
+    # Overwrite a file?
+    if opt.overwrite_files == 'no':
+        return False
+    if opt.overwrite_files == 'yes':
+        return True
+    return overwrite_prompt("Overwrite existing file %s ?" 
+                                % fullname, "overwrite_files")
 
 def write_file_content_sparsely(fullname, n):
     outfd = os.open(fullname, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0600)
@@ -248,6 +295,11 @@ def do_node(top, n, sparse, owner_map, meta = None):
             exclude_candidate += '/'
         if should_rx_exclude_path(exclude_candidate, exclude_rxs):
             return
+        # Check if directory/path exists and if we should overwrite
+        # merge it
+        if not overwrite_checks_success(fullname, n):
+            return
+        
         # If this is a directory, its metadata is the first entry in
         # any .bupm file inside the directory.  Get it.
         if(stat.S_ISDIR(n.mode)):
@@ -292,6 +344,16 @@ o = options.Options(optspec)
 
 git.check_repo_or_die()
 top = vfs.RefList(None)
+
+if opt.directory_merge is not None:
+    opt.directory_merge = opt.directory_merge.lower()
+    if opt.directory_merge not in ["yes", "no"]: 
+        o.fatal('--directory-merge must be "yes" or "no"')
+
+if opt.overwrite_files is not None:
+    opt.overwrite_files = opt.overwrite_files.lower()
+    if opt.overwrite_files not in ["yes", "no"]:
+        o.fatal('--overwrite-files must be "yes" or "no"') 
 
 if not extra:
     o.fatal('must specify at least one filename to restore')
