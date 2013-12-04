@@ -260,6 +260,94 @@ def update_index(tops, excluded_paths, exclude_rxs, new_graft_points):
     msw.close()
     hlinks.commit_save()
 
+def rename_files_in_index(paths, new_graft_points):
+    # tmax and start must be epoch nanoseconds.
+    tmax = (time.time() - 1) * 10**9
+    ri = index.Reader(indexfile)
+    msw = index.MetaStoreWriter(indexfile + '.meta')
+    wi = index.Writer(indexfile, msw, tmax)
+ 
+    tstart = int(time.time()) * 10**9
+
+    hlinks = hlinkdb.HLinkDB(indexfile + '.hlink')
+    
+    # TODO: move to cmdline processor?
+    path_pairs = []
+    for path in paths:
+        oldname,newname = path.split('=')
+        path_pairs.append((oldname, newname))
+    
+    # This is intended for use with atomic rename operations only. As such
+    # it operates solely on the index, and assumes all metadata has remained
+    # valid. This should be safe with things like inotify, and bup-save will
+    # catch problems anyway (e.g. files that went missing between operations)/
+    for (oldname, newname) in path_pairs:
+        if opt.verbose>=1 :
+            sys.stdout.write('Rename %s -> %s\n' % (grafted_oldname, grafted_newname))
+            sys.stdout.flush()
+        qprogress('Renaming: %d\r' % total)
+        total += 1
+        
+        grafted_oldname = graftpath(new_graft_points, oldname)
+        grafted_newname = graftpath(new_graft_points, newname)
+
+        rig = IterHelper(ri.iter(name=grafted_oldname))
+        # There's an edge case that we get told to move something which isn't
+        # in the index. In this case, we invoke update_index to add it.
+        if not rig.cur:
+            # path does not exist in index already. add it normally.
+            sys.stdout.write('%s does not exist in index. Adding as new file(s)' 
+                             % grafted_newname)
+            update_index(newname, None, None, new_graft_points)
+        else:
+            while rig.cur:
+                # hashgen function which duplicates current hashes and gitmode
+                def hashgen(name):
+                    return (rig.cur.gitmode, rig.cur.sha)
+                pst = rig.cur.to_stat() # get stat from stat data
+                # add file with it's existing hash, statinfo and metadata
+                # to the index
+                wi.add(grafted_newname, pst, 
+                       rig.cur.meta_ofs, hashgen = hashgen)
+                # the old file was moved - mark as deleted
+                rig.cur.set_deleted()
+                rig.cur.repack()
+                if rig.cur.nlink > 1 and not stat.S_ISDIR(rig.cur.mode):
+                    hlinks.del_path(rig.cur.name)
+                rig.next()
+    
+    progress('Renaming: %d, done.\n' % total)
+    
+    hlinks.prepare_save()
+
+    if ri.exists():
+        ri.save()
+        wi.flush()
+        if wi.count:
+            wr = wi.new_reader()
+            if opt.check:
+                log('check: before merging: oldfile\n')
+                check_index(ri)
+                log('check: before merging: newfile\n')
+                check_index(wr)
+            mi = index.Writer(indexfile, msw, tmax)
+
+            for e in index.merge(ri, wr):
+                # FIXME: shouldn't we remove deleted entries eventually?  When?
+                mi.add_ixentry(e)
+            
+            ri.close()
+            mi.close()
+            wr.close()
+        wi.abort()
+    else:
+        wi.close()
+
+    msw.close()
+    hlinks.commit_save()
+
+def delete_files_in_index(tops, new_graft_points):
+    pass
 
 optspec = """
 bup index <-p|m|s|u> [options...] <filenames...>
@@ -269,6 +357,8 @@ p,print    print the index entries for the given names (also works with -u)
 m,modified print only added/deleted/modified files (implies -p)
 s,status   print each filename with a status char (A/M/D) (implies -p)
 u,update   recursively update the index entries for the given file/dir names (default if no mode is specified)
+rename     mark files in index as moved but not changed. paths must be given as *oldname*=*newname*
+delete     mark files in the index as deleted without needing to do a full update.
 check      carefully check index file integrity
 clear      clear the index
 regraft    remap modified files real filesystem paths according to new graft points (needs --graft)
@@ -293,6 +383,8 @@ if not (opt.modified or \
         opt['print'] or \
         opt.status or \
         opt.update or \
+        opt.rename or \
+        opt.delete or \
         opt.check or \
         opt.clear or \
         opt.regraft):
@@ -304,10 +396,22 @@ if opt.fake_valid and opt.fake_invalid:
 if opt.clear and opt.indexfile:
     o.fatal('cannot clear an external index (via -f)')
 
+# TODO: regraft isn't strictly incompatible with update. maybe this should be
+# allowed?
 if opt.regraft and opt.update:
     o.fatal('--regraft is incompatible with update')
 if opt.regraft and extra:
     o.fatal('--regraft does not accept a path')
+if opt.regraft and not opt.graft:
+    o.fatal('--regraft requires --graft')
+
+# TODO: regraft may also not be incompatible here
+if opt.rename and (opt.update or opt.delete or opt.regraft): 
+    o.fatal('--rename is incompatible with update, delete and regraft modes.')
+
+# TODO: regraft may also not be incompatible here (but could be confusing)
+if opt.delete and (opt.update or opt.rename or opt.regraft):
+    o.fatal('--delete is incompatible with update, rename and regraft modes.')
 
 # FIXME: remove this once we account for timestamp races, i.e. index;
 # touch new-file; index.  It's possible for this to happen quickly
@@ -329,10 +433,6 @@ if opt.clear:
     log('clear: clearing index.\n')
     clear_index(indexfile)
 
-excluded_paths = parse_excludes(flags, o.fatal)
-exclude_rxs = parse_rx_excludes(flags, o.fatal)
-paths = index.reduce_paths(extra)
-
 graft_points = []
 if opt.graft:
     for (option, parameter) in flags:
@@ -346,6 +446,24 @@ if opt.graft:
             graft_points.append((realpath(old_path), new_path))
 
 graft_points.sort(reverse=True)
+
+# Rename and delete skip normal exclude and path processing.
+# Rename always should, delete perhaps shouldn't.
+excluded_paths = parse_excludes(flags, o.fatal)
+exclude_rxs = parse_rx_excludes(flags, o.fatal)
+if (opt.rename or opt.delete) and (excluded_paths or exclude_rxs):
+    o.fatal('--rename and --delete do not process exclude options.')
+
+if opt.rename:
+    # Sanity check command line
+    for pathpair in extra:
+        if pathpair.count != 1:
+            o.fatal('rename paths must be specified as *oldpath*=*newpath*.') 
+    rename_files_in_index(opt.extra, graft_points)
+elif opt.delete:
+    delete_files_in_index(opt.extra, graft_points)
+else:
+    paths = index.reduce_paths(extra)
 
 if opt.regraft:
     regraft_index(graft_points)

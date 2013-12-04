@@ -314,6 +314,21 @@ class ExistingEntry(Entry):
             self.flags &= ~IX_SHAMISSING
             self.repack()
 
+    def to_stat(self):
+        # return a stat-like object to use as input to wi.add in other places
+        r = xstat.stat_result()
+        r.st_dev = self.dev
+        r.st_ino = self.ino
+        r.st_nlink = self.nlink
+        r.st_ctime = self.ctime
+        r.st_mtime = self.mtime
+        r.st_atime = self.atime
+        r.st_uid = self.uid
+        r.st_gid = self.gid
+        r.st_size = self.size
+        r.st_mode = self.mode
+        return r
+
     def repack(self):
         self._m[self._ofs:self._ofs+ENTLEN] = self.packed()
         if self.parent and not self.is_valid():
