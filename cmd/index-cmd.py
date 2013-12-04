@@ -347,7 +347,68 @@ def rename_files_in_index(paths, new_graft_points):
     hlinks.commit_save()
 
 def delete_files_in_index(tops, new_graft_points):
-    pass
+    # tmax and start must be epoch nanoseconds.
+    tmax = (time.time() - 1) * 10**9
+    ri = index.Reader(indexfile)
+    msw = index.MetaStoreWriter(indexfile + '.meta')
+    wi = index.Writer(indexfile, msw, tmax)
+ 
+    tstart = int(time.time()) * 10**9
+
+    hlinks = hlinkdb.HLinkDB(indexfile + '.hlink')
+    
+    total = 0
+    for top in tops:
+        grafted_top = graftpath(new_graft_points, top)
+
+        # This is intended solely for use with atomic unlink operations.
+        # As such it operates solely on the index and does not check the
+        # validity of the file (it should be invoked when we already know
+        # a file has been deleted by other means).
+        rig = IterHelper(ri.iter(name=grafted_top))
+        if not rig.cur:
+            sys.stdout.write("%s does not exist in index." % grafted_top)
+            total += 1
+        while rig.cur:
+            if opt.verbose>=2 or not (total % 128):
+                qprogress('Deleting: %d\r' % total)
+            total += 1
+            if rig.cur.exists():
+                rig.cur.set_deleted()
+                rig.cur.repack()
+            if rig.cur.nlink > 1 and not stat.S_ISDIR(rig.cur.mode):
+                    hlinks.del_path(rig.cur.name)
+            rig.next()
+    
+    progress('Deleting: %d, done.\n' % total)
+    
+    hlinks.prepare_save()
+
+    if ri.exists():
+        ri.save()
+        wi.flush()
+        if wi.count:
+            wr = wi.new_reader()
+            if opt.check:
+                log('check: before merging: oldfile\n')
+                check_index(ri)
+                log('check: before merging: newfile\n')
+                check_index(wr)
+            mi = index.Writer(indexfile, msw, tmax)
+
+            for e in index.merge(ri, wr):
+                # FIXME: shouldn't we remove deleted entries eventually?  When?
+                mi.add_ixentry(e)
+            
+            ri.close()
+            mi.close()
+            wr.close()
+        wi.abort()
+    else:
+        wi.close()
+
+    msw.close()
+    hlinks.commit_save()
 
 optspec = """
 bup index <-p|m|s|u> [options...] <filenames...>
