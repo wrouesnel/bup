@@ -145,7 +145,7 @@ def regraft_index(new_graft_points):
                 rig.cur.repack()                
             rig.next()
 
-def update_index(top, excluded_paths, exclude_rxs, new_graft_points):
+def update_index(tops, excluded_paths, exclude_rxs, new_graft_points):
     # tmax and start must be epoch nanoseconds.
     tmax = (time.time() - 1) * 10**9
     ri = index.Reader(indexfile)
@@ -353,7 +353,7 @@ if opt.regraft:
 if opt.update:
     if not extra:
         o.fatal('update mode (-u) requested but no paths given')
-    update_index(rp, excluded_paths, exclude_rxs, graft_points)
+    update_index(paths, excluded_paths, exclude_rxs, graft_points)
 
 if opt['print'] or opt.status or opt.modified:
     for (name, ent) in index.Reader(indexfile).filter(extra or ['']):
