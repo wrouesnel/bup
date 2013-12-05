@@ -120,7 +120,7 @@ def regraft_index(new_graft_points):
                                           rig.cur.name)
                 # Log some progress
                 if opt.verbose>=2:
-                    sys.stdout.write('%s -> %s\n' % 
+                    sys.stdout.write('Src: %s\nInd: %s\n' % 
                                      (rig.cur.name, newrealpath))
                     sys.stdout.flush()
                     qprogress('Regrafting: %d\r' % total)
@@ -175,7 +175,7 @@ def update_index(tops, excluded_paths, exclude_rxs, new_graft_points):
             # convert path to bup archive form
             grafted_path = graftpath(new_graft_points, path)
             if opt.verbose>=2 or (opt.verbose==1 and stat.S_ISDIR(pst.st_mode)):
-                sys.stdout.write('%s -> %s\n' % (path, grafted_path))
+                sys.stdout.write('Src: %s\nInd: %s\n' % (path, grafted_path))
                 sys.stdout.flush()
                 qprogress('Indexing: %d\r' % total)
             elif not (total % 128):
@@ -283,7 +283,7 @@ def rename_files_in_index(paths, new_graft_points):
     # catch problems anyway (e.g. files that went missing between operations)/
     for (oldname, newname) in path_pairs:
         if opt.verbose>=1 :
-            sys.stdout.write('Rename %s -> %s\n' % (grafted_oldname, grafted_newname))
+            sys.stdout.write('Ind Old: %s\nInd New: %s\n' % (grafted_oldname, grafted_newname))
             sys.stdout.flush()
         qprogress('Renaming: %d\r' % total)
         total += 1
