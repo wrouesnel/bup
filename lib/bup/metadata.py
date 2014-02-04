@@ -1126,3 +1126,26 @@ def extract(file, restore_numeric_ids=False, create_symlinks=True):
         # Shouldn't have to check for risky paths here (omitted above).
         dir.apply_to_path(path=dir.path,
                           restore_numeric_ids=restore_numeric_ids)
+
+def find_dir_item_metadata_by_name(dir, name):
+    """Find metadata in dir (a node) for an item with the given name,
+    or for the directory itself if the name is ''."""
+    meta_stream = None
+    try:
+        mfile = dir.metadata_file() # VFS file -- cannot close().
+        if mfile:
+            meta_stream = mfile.open()
+            # First entry is for the dir itself.
+            meta = Metadata.read(meta_stream)
+            if name == '':
+                return meta
+            for sub in dir:
+                if stat.S_ISDIR(sub.mode):
+                    meta = find_dir_item_metadata_by_name(sub, '')
+                else:
+                    meta = Metadata.read(meta_stream)
+                if sub.name == name:
+                    return meta
+    finally:
+        if meta_stream:
+            meta_stream.close()
