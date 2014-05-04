@@ -9,9 +9,9 @@ bup-index - print and/or update the bup filesystem index
 # SYNOPSIS
 
 bup index \<-p|-m|-s|-u\> [-H] [-l] [-x] [\--fake-valid] [\--no-check-device]
-[\--fake-invalid] [\--check] [\--clear] [\--regraft] 
-[\--graft \<*oldfile*=*newfile|...\>] [-f *indexfile*] [\--exclude *path*] 
-[\--exclude-from *filename*] [\--exclude-rx *pattern*] [-v] \<filenames...\>
+[\--fake-invalid] [\--check] [\--clear] [\--regraft] [-f *indexfile*] 
+[\--exclude *path*] [\--exclude-from *filename*] [\--exclude-rx *pattern*]
+[\--exclude-rx-from *filename*] [-v] \<filenames...\>
 
 # DESCRIPTION
 
@@ -181,9 +181,10 @@ does, due to the accommodations described above.
     format to the `-l` option to `ls`(1).
 
 -x, \--xdev, \--one-file-system
-:   don't cross filesystem boundaries when recursing
-    through the filesystem.  Only applicable if you're
-    using `-u`.
+:   don't cross filesystem boundaries when recursing through the
+    filesystem -- though as with tar and rsync, the mount points
+    themselves will still be indexed.  Only applicable if you're using
+    `-u`.
     
 \--fake-valid
 :   mark specified filenames as up-to-date even if they
@@ -207,12 +208,11 @@ does, due to the accommodations described above.
     `$BUP_DIR/bupindex`.
 
 \--exclude=*path*
-:   exclude *path* from the backup; bup will not expand *path* in any
-    way (can be used more than once).
+:   exclude *path* from the backup (may be repeated).
 
 \--exclude-from=*filename*
-:   read --exclude paths from *filename*, one path per-line (can be
-    used more than once).
+:   read --exclude paths from *filename*, one path per-line (may be
+    repeated).
 
 \--exclude-rx=*pattern*
 :   exclude any path matching *pattern*, which must be a Python regular
@@ -220,7 +220,7 @@ does, due to the accommodations described above.
     will be compared against the full path, without anchoring, so
     "x/y" will match "ox/yard" or "box/yards".  To exclude the
     contents of /tmp, but not the directory itself, use
-    "^/tmp/.". (can be specified more than once)
+    "^/tmp/.". (may be repeated)
 
     Examples:
 
@@ -228,6 +228,10 @@ does, due to the accommodations described above.
       * '/foo/$' - exclude any directory named foo
       * '/foo/.' - exclude the content of any directory named foo
       * '^/tmp/.' - exclude root-level /tmp's content, but not /tmp itself
+
+\--exclude-rx-from=*filename*
+:   read --exclude-rx patterns from *filename*, one pattern per-line
+    (may be repeated).
 
 \--no-check-device
 :   don't mark a an entry invalid if the device number (stat(2)
@@ -240,8 +244,7 @@ does, due to the accommodations described above.
     is updated; with two `-v`, print each file too.
 
 
-# EXAMPLE
-
+# EXAMPLES
     bup index -vux /etc /var /usr
     
 

@@ -8,7 +8,7 @@ import errno, os, sys, stat, time, pwd, grp, socket
 from cStringIO import StringIO
 from bup import vint, xstat
 from bup.drecurse import recursive_dirlist
-from bup.helpers import add_error, mkdirp, log, is_superuser
+from bup.helpers import add_error, mkdirp, log, is_superuser, format_filesize
 from bup.helpers import pwd_from_uid, pwd_from_name, grp_from_gid, grp_from_name
 from bup.xstat import utime, lutime
 
@@ -27,7 +27,9 @@ if sys.platform.startswith('linux'):
             xattr = None
 
 posix1e = None
-if not (sys.platform.startswith('cygwin') or sys.platform.startswith('darwin')):
+if not (sys.platform.startswith('cygwin') \
+        or sys.platform.startswith('darwin') \
+        or sys.platform.startswith('netbsd')):
     try:
         import posix1e
     except ImportError:
@@ -56,7 +58,6 @@ except ImportError:
 # FIXME: Add nfsv4 acl handling - see nfs4-acl-tools.
 # FIXME: Consider other entries mentioned in stat(2) (S_IFDOOR, etc.).
 # FIXME: Consider pack('vvvvsss', ...) optimization.
-# FIXME: Consider caching users/groups.
 
 ## FS notes:
 #
@@ -370,9 +371,6 @@ class Metadata:
                 else:
                     raise
 
-        # Implement tar/rsync-like semantics; see bup-restore(1).
-        # FIXME: should we consider caching user/group name <-> id
-        # mappings, getgroups(), etc.?
         uid = gid = -1 # By default, do nothing.
         if is_superuser():
             uid = self.uid
@@ -647,7 +645,7 @@ class Metadata:
             existing_xattrs = set(xattr.list(path, nofollow=True))
         except IOError, e:
             if e.errno == errno.EACCES:
-                raise ApplyError('xattr.set: %s' % e)
+                raise ApplyError('xattr.set %r: %s' % (path, e))
             else:
                 raise
         for k, v in self.linux_xattr:
@@ -658,7 +656,7 @@ class Metadata:
                 except IOError, e:
                     if e.errno == errno.EPERM \
                             or e.errno == errno.EOPNOTSUPP:
-                        raise ApplyError('xattr.set: %s' % e)
+                        raise ApplyError('xattr.set %r: %s' % (path, e))
                     else:
                         raise
             existing_xattrs -= frozenset([k])
@@ -667,12 +665,13 @@ class Metadata:
                 xattr.remove(path, k, nofollow=True)
             except IOError, e:
                 if e.errno == errno.EPERM:
-                    raise ApplyError('xattr.remove: %s' % e)
+                    raise ApplyError('xattr.remove %r: %s' % (path, e))
                 else:
                     raise
 
     def __init__(self):
-        self.mode = None
+        self.mode = self.uid = self.gid = self.user = self.group = None
+        self.atime = self.mtime = self.ctime = None
         # optional members
         self.path = None
         self.size = None
@@ -681,6 +680,33 @@ class Metadata:
         self.linux_attr = None
         self.linux_xattr = None
         self.posix1e_acl = None
+
+    def __repr__(self):
+        result = ['<%s instance at %s' % (self.__class__, hex(id(self)))]
+        if self.path:
+            result += ' path:' + repr(self.path)
+        if self.mode:
+            result += ' mode:' + repr(xstat.mode_str(self.mode)
+                                      + '(%s)' % hex(self.mode))
+        if self.uid:
+            result += ' uid:' + str(self.uid)
+        if self.gid:
+            result += ' gid:' + str(self.gid)
+        if self.user:
+            result += ' user:' + repr(self.user)
+        if self.group:
+            result += ' group:' + repr(self.group)
+        if self.size:
+            result += ' size:' + repr(self.size)
+        for name, val in (('atime', self.atime),
+                          ('mtime', self.mtime),
+                          ('ctime', self.ctime)):
+            result += ' %s:%r' \
+                % (name,
+                   time.strftime('%Y-%m-%d %H:%M %z',
+                                 time.gmtime(xstat.fstime_floor_secs(val))))
+        result += '>'
+        return ''.join(result)
 
     def write(self, port, include_path=True):
         records = include_path and [(_rec_tag_path, self._encode_path())] or []
@@ -863,29 +889,57 @@ all_fields = frozenset(['path',
                         'posix1e-acl'])
 
 
-def summary_str(meta):
-    mode_val = xstat.mode_str(meta.mode)
-    user_val = meta.user
-    if not user_val:
-        user_val = str(meta.uid)
-    group_val = meta.group
-    if not group_val:
-        group_val = str(meta.gid)
-    size_or_dev_val = '-'
-    if stat.S_ISCHR(meta.mode) or stat.S_ISBLK(meta.mode):
-        size_or_dev_val = '%d,%d' % (os.major(meta.rdev), os.minor(meta.rdev))
-    elif meta.size:
-        size_or_dev_val = meta.size
-    mtime_secs = xstat.fstime_floor_secs(meta.mtime)
-    time_val = time.strftime('%Y-%m-%d %H:%M', time.localtime(mtime_secs))
-    path_val = meta.path or ''
-    if stat.S_ISLNK(meta.mode):
-        path_val += ' -> ' + meta.symlink_target
-    return '%-10s %-11s %11s %16s %s' % (mode_val,
-                                         user_val + "/" + group_val,
-                                         size_or_dev_val,
-                                         time_val,
-                                         path_val)
+def summary_str(meta, numeric_ids = False, classification = None,
+                human_readable = False):
+
+    """Return a string containing the "ls -l" style listing for meta.
+    Classification may be "all", "type", or None."""
+    user_str = group_str = size_or_dev_str = '?'
+    symlink_target = None
+    if meta:
+        name = meta.path
+        mode_str = xstat.mode_str(meta.mode)
+        symlink_target = meta.symlink_target
+        mtime_secs = xstat.fstime_floor_secs(meta.mtime)
+        mtime_str = time.strftime('%Y-%m-%d %H:%M', time.localtime(mtime_secs))
+        if meta.user and not numeric_ids:
+            user_str = meta.user
+        elif meta.uid != None:
+            user_str = str(meta.uid)
+        if meta.group and not numeric_ids:
+            group_str = meta.group
+        elif meta.gid != None:
+            group_str = str(meta.gid)
+        if stat.S_ISCHR(meta.mode) or stat.S_ISBLK(meta.mode):
+            if meta.rdev:
+                size_or_dev_str = '%d,%d' % (os.major(meta.rdev),
+                                             os.minor(meta.rdev))
+        elif meta.size != None:
+            if human_readable:
+                size_or_dev_str = format_filesize(meta.size)
+            else:
+                size_or_dev_str = str(meta.size)
+        else:
+            size_or_dev_str = '-'
+        if classification:
+            classification_str = \
+                xstat.classification_str(meta.mode, classification == 'all')
+    else:
+        mode_str = '?' * 10
+        mtime_str = '????-??-?? ??:??'
+        classification_str = '?'
+
+    name = name or ''
+    if classification:
+        name += classification_str
+    if symlink_target:
+        name += ' -> ' + meta.symlink_target
+
+    return '%-10s %-11s %11s %16s %s' % (mode_str,
+                                         user_str + "/" + group_str,
+                                         size_or_dev_str,
+                                         mtime_str,
+                                         name)
 
 
 def detailed_str(meta, fields = None):

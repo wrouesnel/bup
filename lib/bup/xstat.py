@@ -3,30 +3,38 @@ import os
 import stat as pystat
 from bup import _helpers
 
+try:
+    _bup_utimensat = _helpers.bup_utimensat
+except AttributeError, e:
+    _bup_utimensat = False
 
 try:
-    _have_bup_utime_ns = _helpers.bup_utime_ns
+    _bup_utimes = _helpers.bup_utimes
 except AttributeError, e:
-    _have_bup_utime_ns = False
+    _bup_utimes = False
 
 try:
-    _have_bup_lutime_ns = _helpers.bup_lutime_ns
+    _bup_lutimes = _helpers.bup_lutimes
 except AttributeError, e:
-    _have_bup_lutime_ns = False
+    _bup_lutimes = False
 
 
 def timespec_to_nsecs((ts_s, ts_ns)):
-    # c.f. _helpers.c: timespec_vals_to_py_ns()
-    if ts_ns < 0 or ts_ns > 999999999:
-        raise Exception('invalid timespec nsec value')
     return ts_s * 10**9 + ts_ns
 
 
 def nsecs_to_timespec(ns):
     """Return (s, ns) where ns is always non-negative
-    and t = s + ns / 10e8""" # metadata record rep (and libc rep)
+    and t = s + ns / 10e8""" # metadata record rep
     ns = int(ns)
     return (ns / 10**9, ns % 10**9)
+
+
+def nsecs_to_timeval(ns):
+    """Return (s, us) where ns is always non-negative
+    and t = s + us / 10e5"""
+    ns = int(ns)
+    return (ns / 10**9, (ns % 10**9) / 1000)
 
 
 def fstime_floor_secs(ns):
@@ -48,28 +56,29 @@ def fstime_to_sec_str(fstime):
         return '%d.%09d' % (s, ns)
 
 
-if _have_bup_utime_ns:
+if _bup_utimensat:
     def utime(path, times):
         """Times must be provided as (atime_ns, mtime_ns)."""
         atime = nsecs_to_timespec(times[0])
         mtime = nsecs_to_timespec(times[1])
-        _helpers.bup_utime_ns(path, (atime, mtime))
-else:
-    def utime(path, times):
-        """Times must be provided as (atime_ns, mtime_ns)."""
-        atime = fstime_floor_secs(times[0])
-        mtime = fstime_floor_secs(times[1])
-        os.utime(path, (atime, mtime))
-
-
-if _have_bup_lutime_ns:
+        _bup_utimensat(_helpers.AT_FDCWD, path, (atime, mtime), 0)
     def lutime(path, times):
         """Times must be provided as (atime_ns, mtime_ns)."""
         atime = nsecs_to_timespec(times[0])
         mtime = nsecs_to_timespec(times[1])
-        _helpers.bup_lutime_ns(path, (atime, mtime))
-else:
-    lutime = False
+        _bup_utimensat(_helpers.AT_FDCWD, path, (atime, mtime),
+                       _helpers.AT_SYMLINK_NOFOLLOW)
+else: # Must have these if utimensat isn't available.
+    def utime(path, times):
+        """Times must be provided as (atime_ns, mtime_ns)."""
+        atime = nsecs_to_timeval(times[0])
+        mtime = nsecs_to_timeval(times[1])
+        _bup_utimes(path, (atime, mtime))
+    def lutime(path, times):
+        """Times must be provided as (atime_ns, mtime_ns)."""
+        atime = nsecs_to_timeval(times[0])
+        mtime = nsecs_to_timeval(times[1])
+        _bup_lutimes(path, (atime, mtime))
 
 
 class stat_result:
@@ -107,6 +116,7 @@ def lstat(path):
 
 def mode_str(mode):
     result = ''
+    # FIXME: Other types?
     if pystat.S_ISREG(mode):
         result += '-'
     elif pystat.S_ISDIR(mode):
@@ -134,3 +144,23 @@ def mode_str(mode):
     result += 'w' if (mode & pystat.S_IWOTH) else '-'
     result += 'x' if (mode & pystat.S_IXOTH) else '-'
     return result
+
+
+def classification_str(mode, include_exec):
+    if pystat.S_ISREG(mode):
+        if include_exec \
+           and (pystat.S_IMODE(mode) \
+                & (pystat.S_IXUSR | pystat.S_IXGRP | pystat.S_IXOTH)):
+            return '*'
+        else:
+            return ''
+    elif pystat.S_ISDIR(mode):
+        return '/'
+    elif pystat.S_ISLNK(mode):
+        return '@'
+    elif pystat.S_ISFIFO(mode):
+        return '|'
+    elif pystat.S_ISSOCK(mode):
+        return '='
+    else:
+        return ''

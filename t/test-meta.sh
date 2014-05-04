@@ -7,6 +7,15 @@ set -o pipefail
 TOP="$(WVPASS pwd)" || exit $?
 export BUP_DIR="$TOP/buptest.tmp"
 
+WVPASS force-delete "$TOP/bupmeta.tmp"
+timestamp_resolutions="$(t/ns-timestamp-resolutions "$TOP/bupmeta.tmp")" \
+    || exit $?
+WVPASS rm "$TOP/bupmeta.tmp"
+atime_resolution="$(echo $timestamp_resolutions | WVPASS cut -d' ' -f 1)" \
+    || exit $?
+mtime_resolution="$(echo $timestamp_resolutions | WVPASS cut -d' ' -f 2)" \
+    || exit $?
+
 bup()
 {
     "$TOP/bup" "$@"
@@ -34,7 +43,9 @@ genstat()
         export PATH="$TOP:$PATH" # pick up bup
         # Skip atime (test elsewhere) to avoid the observer effect.
         WVPASS find . | WVPASS sort \
-            | WVPASS xargs bup xstat --exclude-fields ctime,atime,size
+            | WVPASS xargs bup xstat \
+            --mtime-resolution "$mtime_resolution"ns \
+            --exclude-fields ctime,atime,size
     )
 }
 
@@ -101,7 +112,7 @@ setup-test-tree()
     WVPASS force-delete "$BUP_DIR"
     WVPASS force-delete "$TOP/bupmeta.tmp"
     WVPASS mkdir -p "$TOP/bupmeta.tmp/src"
-    WVPASS cp -pPR Documentation cmd lib t "$TOP/bupmeta.tmp"/src
+    WVPASS cp -pPR Documentation cmd config lib "$TOP/bupmeta.tmp"/src
 
     # Add some hard links for the general tests.
     (
@@ -418,11 +429,20 @@ src/foo/3"
         exit 0
     fi
 
+    first_group="$(WVPASS python -c 'import os,grp; \
+      print grp.getgrgid(os.getgroups()[0])[0]')" || exit $?
+    last_group="$(python -c 'import os,grp; \
+      print grp.getgrgid(os.getgroups()[-1])[0]')" || exit $?
+
     WVSTART 'metadata (restoration of ownership)'
     WVPASS force-delete "$TOP/bupmeta.tmp"
     WVPASS mkdir "$TOP/bupmeta.tmp"
     WVPASS cd "$TOP/bupmeta.tmp"
     WVPASS touch src
+    # Some systems always assign the parent dir group to new paths
+    # (sgid).  Make sure the group is one we're in.
+    WVPASS chgrp -R "$first_group" src
+
     WVPASS bup meta -cf src.meta src
 
     WVPASS mkdir dest
@@ -436,8 +456,6 @@ src/foo/3"
     WVPASS bup xstat src | WVPASS grep -qvE '^user: root'
 
     # Make sure we can restore one of the user's groups.
-    last_group="$(python -c 'import os,grp; \
-      print grp.getgrgid(os.getgroups()[0])[0]')"
     WVPASS rm -rf src
     WVPASS bup meta --edit --set-group "$last_group" ../src.meta \
         | WVPASS bup meta -x
@@ -697,7 +715,7 @@ if [ $(t/root-status) = root ]; then
             WVPASS cd testfs-limited/src-restore
             WVFAIL bup meta --extract --file ../../testfs/src.meta
             WVFAIL bup meta --extract --file ../../testfs/src.meta 2>&1 \
-                | WVPASS grep -e '^xattr\.set:' \
+                | WVPASS grep -e "^xattr\.set '" \
                 | WVPASS python -c \
                 'import sys; exit(not len(sys.stdin.readlines()) == 2)'
         ) || exit $?

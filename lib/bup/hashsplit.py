@@ -61,11 +61,13 @@ def _splitbuf(buf, basebits, fanbits):
     while 1:
         b = buf.peek(buf.used())
         (ofs, bits) = _helpers.splitbuf(b)
-        if ofs > BLOB_MAX:
-            ofs = BLOB_MAX
         if ofs:
+            if ofs > BLOB_MAX:
+                ofs = BLOB_MAX
+                level = 0
+            else:
+                level = (bits-basebits)//fanbits  # integer division
             buf.eat(ofs)
-            level = (bits-basebits)//fanbits  # integer division
             yield buffer(b, 0, ofs), level
         else:
             break
@@ -133,7 +135,7 @@ def _make_shalist(l):
 
 def _squish(maketree, stacks, n):
     i = 0
-    while i<n or len(stacks[i]) > MAX_PER_TREE:
+    while i < n or len(stacks[i]) >= MAX_PER_TREE:
         while len(stacks) <= i+1:
             stacks.append([])
         if len(stacks[i]) == 1:
@@ -159,17 +161,17 @@ def split_to_shalist(makeblob, maketree, files,
         stacks = [[]]
         for (sha,size,level) in sl:
             stacks[0].append((GIT_MODE_FILE, sha, size))
-            if level:
-                _squish(maketree, stacks, level)
+            _squish(maketree, stacks, level)
         #log('stacks: %r\n' % [len(i) for i in stacks])
         _squish(maketree, stacks, len(stacks)-1)
         #log('stacks: %r\n' % [len(i) for i in stacks])
         return _make_shalist(stacks[-1])[0]
 
 
-def split_to_blob_or_tree(makeblob, maketree, files, keep_boundaries):
+def split_to_blob_or_tree(makeblob, maketree, files,
+                          keep_boundaries, progress=None):
     shalist = list(split_to_shalist(makeblob, maketree,
-                                    files, keep_boundaries))
+                                    files, keep_boundaries, progress))
     if len(shalist) == 1:
         return (shalist[0][0], shalist[0][2])
     elif len(shalist) == 0:

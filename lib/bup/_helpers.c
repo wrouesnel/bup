@@ -46,6 +46,107 @@
 
 static int istty2 = 0;
 
+// At the moment any code that calls INTGER_TO_PY() will have to
+// disable -Wtautological-compare for clang.  See below.
+
+#define INTEGER_TO_PY(x) \
+    (((x) >= 0) ? PyLong_FromUnsignedLongLong(x) : PyLong_FromLongLong(x))
+
+
+static int bup_ulong_from_pyint(unsigned long *x, PyObject *py,
+                                const char *name)
+{
+    const long tmp = PyInt_AsLong(py);
+    if (tmp == -1 && PyErr_Occurred())
+    {
+        if (PyErr_ExceptionMatches(PyExc_OverflowError))
+            PyErr_Format(PyExc_OverflowError, "%s too big for unsigned long",
+                         name);
+        return 0;
+    }
+    if (tmp < 0)
+    {
+        PyErr_Format(PyExc_OverflowError,
+                     "negative %s cannot be converted to unsigned long", name);
+        return 0;
+    }
+    *x = tmp;
+    return 1;
+}
+
+
+static int bup_ulong_from_py(unsigned long *x, PyObject *py, const char *name)
+{
+    if (PyInt_Check(py))
+        return bup_ulong_from_pyint(x, py, name);
+
+    if (!PyLong_Check(py))
+    {
+        PyErr_Format(PyExc_TypeError, "expected integer %s", name);
+        return 0;
+    }
+
+    const unsigned long tmp = PyLong_AsUnsignedLong(py);
+    if (PyErr_Occurred())
+    {
+        if (PyErr_ExceptionMatches(PyExc_OverflowError))
+            PyErr_Format(PyExc_OverflowError, "%s too big for unsigned long",
+                         name);
+        return 0;
+    }
+    *x = tmp;
+    return 1;
+}
+
+
+static int bup_uint_from_py(unsigned int *x, PyObject *py, const char *name)
+{
+    unsigned long tmp;
+    if (!bup_ulong_from_py(&tmp, py, name))
+        return 0;
+
+    if (tmp > UINT_MAX)
+    {
+        PyErr_Format(PyExc_OverflowError, "%s too big for unsigned int", name);
+        return 0;
+    }
+    *x = tmp;
+    return 1;
+}
+
+static int bup_ullong_from_py(unsigned PY_LONG_LONG *x, PyObject *py,
+                              const char *name)
+{
+    if (PyInt_Check(py))
+    {
+        unsigned long tmp;
+        if (bup_ulong_from_pyint(&tmp, py, name))
+        {
+            *x = tmp;
+            return 1;
+        }
+        return 0;
+    }
+
+    if (!PyLong_Check(py))
+    {
+        PyErr_Format(PyExc_TypeError, "integer argument expected for %s", name);
+        return 0;
+    }
+
+    const unsigned PY_LONG_LONG tmp = PyLong_AsUnsignedLongLong(py);
+    if (tmp == (unsigned long long) -1 && PyErr_Occurred())
+    {
+        if (PyErr_ExceptionMatches(PyExc_OverflowError))
+            PyErr_Format(PyExc_OverflowError,
+                         "%s too big for unsigned long long", name);
+        return 0;
+    }
+    *x = tmp;
+    return 1;
+}
+
+
 // Probably we should use autoconf or something and set HAVE_PY_GETARGCARGV...
 #if __WIN32__ || __CYGWIN__
 
@@ -403,7 +504,7 @@ static uint32_t _get_idx_i(struct idx *idx)
 
 static PyObject *merge_into(PyObject *self, PyObject *args)
 {
-    PyObject *ilist = NULL;
+    PyObject *py_total, *ilist = NULL;
     unsigned char *fmap = NULL;
     struct sha *sha_ptr, *sha_start = NULL;
     uint32_t *table_ptr, *name_ptr, *name_start;
@@ -415,8 +516,12 @@ static PyObject *merge_into(PyObject *self, PyObject *args)
     int num_i;
     int last_i;
 
-    if (!PyArg_ParseTuple(args, "w#iIO", &fmap, &flen, &bits, &total, &ilist))
+    if (!PyArg_ParseTuple(args, "w#iOO",
+                          &fmap, &flen, &bits, &py_total, &ilist))
 	return NULL;
+
+    if (!bup_uint_from_py(&total, py_total, "total"))
+        return NULL;
 
     num_i = PyList_Size(ilist);
     idxs = (struct idx **)PyMem_Malloc(num_i * sizeof(struct idx *));
@@ -490,7 +595,7 @@ static uint64_t htonll(uint64_t value)
 static PyObject *write_idx(PyObject *self, PyObject *args)
 {
     char *filename = NULL;
-    PyObject *idx = NULL;
+    PyObject *py_total, *idx = NULL;
     PyObject *part;
     unsigned char *fmap = NULL;
     Py_ssize_t flen = 0;
@@ -501,8 +606,12 @@ static PyObject *write_idx(PyObject *self, PyObject *args)
     uint64_t *ofs64_ptr;
     struct sha *sha_ptr;
 
-    if (!PyArg_ParseTuple(args, "sw#OI", &filename, &fmap, &flen, &idx, &total))
+    if (!PyArg_ParseTuple(args, "sw#OO",
+                          &filename, &fmap, &flen, &idx, &py_total))
 	return NULL;
+
+    if (!bup_uint_from_py(&total, py_total, "total"))
+        return NULL;
 
     if (PyList_Size (idx) != FAN_ENTRIES) // Check for list of the right length.
         return PyErr_Format (PyExc_TypeError, "idx must contain %d entries",
@@ -531,15 +640,20 @@ static PyObject *write_idx(PyObject *self, PyObject *args)
 	{
 	    unsigned char *sha = NULL;
 	    Py_ssize_t sha_len = 0;
-	    unsigned int crc = 0;
-            unsigned PY_LONG_LONG ofs_py = 0;
+            PyObject *crc_py, *ofs_py;
+	    unsigned int crc;
+            unsigned PY_LONG_LONG ofs_ull;
 	    uint64_t ofs;
-	    if (!PyArg_ParseTuple(PyList_GET_ITEM(part, j), "t#IK",
-				  &sha, &sha_len, &crc, &ofs_py))
+	    if (!PyArg_ParseTuple(PyList_GET_ITEM(part, j), "t#OO",
+				  &sha, &sha_len, &crc_py, &ofs_py))
 		return NULL;
+            if(!bup_uint_from_py(&crc, crc_py, "crc"))
+                return NULL;
+            if(!bup_ullong_from_py(&ofs_ull, ofs_py, "ofs"))
+                return NULL;
             assert(crc <= UINT32_MAX);
-            assert(ofs_py <= UINT64_MAX);
-	    ofs = ofs_py;
+            assert(ofs_ull <= UINT64_MAX);
+	    ofs = ofs_ull;
 	    if (sha_len != sizeof(struct sha))
 		return NULL;
 	    memcpy(sha_ptr++, sha, sizeof(struct sha));
@@ -693,7 +807,7 @@ static PyObject *fadvise_done(PyObject *self, PyObject *args)
 static PyObject *bup_get_linux_file_attr(PyObject *self, PyObject *args)
 {
     int rc;
-    unsigned long attr;
+    unsigned int attr;
     char *path;
     int fd;
 
@@ -713,20 +827,25 @@ static PyObject *bup_get_linux_file_attr(PyObject *self, PyObject *args)
     }
 
     close(fd);
-    return Py_BuildValue("k", attr);
+    return Py_BuildValue("I", attr);
 }
 #endif /* def BUP_HAVE_FILE_ATTRS */
+
 
 
 #ifdef BUP_HAVE_FILE_ATTRS
 static PyObject *bup_set_linux_file_attr(PyObject *self, PyObject *args)
 {
     int rc;
-    unsigned long orig_attr, attr;
+    unsigned int orig_attr, attr;
     char *path;
+    PyObject *py_attr;
     int fd;
 
-    if (!PyArg_ParseTuple(args, "sk", &path, &attr))
+    if (!PyArg_ParseTuple(args, "sO", &path, &py_attr))
+        return NULL;
+
+    if (!bup_uint_from_py(&attr, py_attr, "attr"))
         return NULL;
 
     fd = open(path, O_RDONLY | O_NONBLOCK | O_LARGEFILE | O_NOFOLLOW);
@@ -763,170 +882,174 @@ static PyObject *bup_set_linux_file_attr(PyObject *self, PyObject *args)
 #endif /* def BUP_HAVE_FILE_ATTRS */
 
 
-#if defined(HAVE_UTIMENSAT) || defined(HAVE_FUTIMES) || defined(HAVE_LUTIMES)
+#ifndef HAVE_UTIMENSAT
+#ifndef HAVE_UTIMES
+#error "cannot find utimensat or utimes()"
+#endif
+#ifndef HAVE_LUTIMES
+#error "cannot find utimensat or lutimes()"
+#endif
+#endif
 
-static int bup_parse_xutime_args(char **path,
-                                 long *access,
-                                 long *access_ns,
-                                 long *modification,
-                                 long *modification_ns,
-                                 PyObject *self, PyObject *args)
-{
-    if (!PyArg_ParseTuple(args, "s((ll)(ll))",
-                          path,
-                          access, access_ns,
-                          modification, modification_ns))
-        return 0;
 
-    if (isnan(*access))
-    {
-        PyErr_SetString(PyExc_ValueError, "access time is NaN");
-        return 0;
-    }
-    else if (isinf(*access))
-    {
-        PyErr_SetString(PyExc_ValueError, "access time is infinite");
-        return 0;
-    }
-    else if (isnan(*modification))
-    {
-        PyErr_SetString(PyExc_ValueError, "modification time is NaN");
-        return 0;
-    }
-    else if (isinf(*modification))
-    {
-        PyErr_SetString(PyExc_ValueError, "modification time is infinite");
-        return 0;
-    }
+#define INTEGRAL_ASSIGNMENT_FITS(dest, src)                             \
+    ({                                                                  \
+        *(dest) = (src);                                                \
+        *(dest) == (src) && (*(dest) < 1) == ((src) < 1);               \
+    })
 
-    if (isnan(*access_ns))
-    {
-        PyErr_SetString(PyExc_ValueError, "access time ns is NaN");
-        return 0;
-    }
-    else if (isinf(*access_ns))
-    {
-        PyErr_SetString(PyExc_ValueError, "access time ns is infinite");
-        return 0;
-    }
-    else if (isnan(*modification_ns))
-    {
-        PyErr_SetString(PyExc_ValueError, "modification time ns is NaN");
-        return 0;
-    }
-    else if (isinf(*modification_ns))
-    {
-        PyErr_SetString(PyExc_ValueError, "modification time ns is infinite");
-        return 0;
-    }
 
-    return 1;
-}
-
-#endif /* defined(HAVE_UTIMENSAT) || defined(HAVE_FUTIMES)
-          || defined(HAVE_LUTIMES) */
+#define ASSIGN_PYLONG_TO_INTEGRAL(dest, pylong, overflow) \
+    ({                                                     \
+        int result = 0;                                                 \
+        *(overflow) = 0;                                                \
+        const long long lltmp = PyLong_AsLongLong(pylong);              \
+        if (lltmp == -1 && PyErr_Occurred())                            \
+        {                                                               \
+            if (PyErr_ExceptionMatches(PyExc_OverflowError))            \
+            {                                                           \
+                const unsigned long long ulltmp = PyLong_AsUnsignedLongLong(pylong); \
+                if (ulltmp == (unsigned long long) -1 && PyErr_Occurred()) \
+                {                                                       \
+                    if (PyErr_ExceptionMatches(PyExc_OverflowError))    \
+                    {                                                   \
+                        PyErr_Clear();                                  \
+                        *(overflow) = 1;                                \
+                    }                                                   \
+                }                                                       \
+                if (INTEGRAL_ASSIGNMENT_FITS((dest), ulltmp))           \
+                    result = 1;                                         \
+                else                                                    \
+                    *(overflow) = 1;                                    \
+            }                                                           \
+        }                                                               \
+        else                                                            \
+        {                                                               \
+            if (INTEGRAL_ASSIGNMENT_FITS((dest), lltmp))                \
+                result = 1;                                             \
+            else                                                        \
+                *(overflow) = 1;                                        \
+        }                                                               \
+        result;                                                         \
+        })
 
 
 #ifdef HAVE_UTIMENSAT
 
-static PyObject *bup_xutime_ns(PyObject *self, PyObject *args,
-                               int follow_symlinks)
+static PyObject *bup_utimensat(PyObject *self, PyObject *args)
 {
     int rc;
+    int fd, flag;
     char *path;
-    long access, access_ns, modification, modification_ns;
+    PyObject *access_py, *modification_py;
     struct timespec ts[2];
 
-    if (!bup_parse_xutime_args(&path, &access, &access_ns,
-                               &modification, &modification_ns,
-                               self, args))
-       return NULL;
+    if (!PyArg_ParseTuple(args, "is((Ol)(Ol))i",
+                          &fd,
+                          &path,
+                          &access_py, &(ts[0].tv_nsec),
+                          &modification_py, &(ts[1].tv_nsec),
+                          &flag))
+        return NULL;
 
-    ts[0].tv_sec = access;
-    ts[0].tv_nsec = access_ns;
-    ts[1].tv_sec = modification;
-    ts[1].tv_nsec = modification_ns;
-    rc = utimensat(AT_FDCWD, path, ts,
-                   follow_symlinks ? 0 : AT_SYMLINK_NOFOLLOW);
+    int overflow;
+    if (!ASSIGN_PYLONG_TO_INTEGRAL(&(ts[0].tv_sec), access_py, &overflow))
+    {
+        if (overflow)
+            PyErr_SetString(PyExc_ValueError,
+                            "unable to convert access time seconds for utimensat");
+        return NULL;
+    }
+    if (!ASSIGN_PYLONG_TO_INTEGRAL(&(ts[1].tv_sec), modification_py, &overflow))
+    {
+        if (overflow)
+            PyErr_SetString(PyExc_ValueError,
+                            "unable to convert modification time seconds for utimensat");
+        return NULL;
+    }
+    rc = utimensat(fd, path, ts, flag);
     if (rc != 0)
         return PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
 
     return Py_BuildValue("O", Py_None);
 }
 
+#endif /* def HAVE_UTIMENSAT */
 
-#define BUP_HAVE_BUP_UTIME_NS 1
-static PyObject *bup_utime_ns(PyObject *self, PyObject *args)
+
+#if defined(HAVE_UTIMES) || defined(HAVE_LUTIMES)
+
+static int bup_parse_xutimes_args(char **path,
+                                  struct timeval tv[2],
+                                  PyObject *args)
 {
-    return bup_xutime_ns(self, args, 1);
+    PyObject *access_py, *modification_py;
+    long long access_us, modification_us; // POSIX guarantees tv_usec is signed.
+
+    if (!PyArg_ParseTuple(args, "s((OL)(OL))",
+                          path,
+                          &access_py, &access_us,
+                          &modification_py, &modification_us))
+        return 0;
+
+    int overflow;
+    if (!ASSIGN_PYLONG_TO_INTEGRAL(&(tv[0].tv_sec), access_py, &overflow))
+    {
+        if (overflow)
+            PyErr_SetString(PyExc_ValueError, "unable to convert access time seconds to timeval");
+        return 0;
+    }
+    if (!INTEGRAL_ASSIGNMENT_FITS(&(tv[0].tv_usec), access_us))
+    {
+        PyErr_SetString(PyExc_ValueError, "unable to convert access time nanoseconds to timeval");
+        return 0;
+    }
+    if (!ASSIGN_PYLONG_TO_INTEGRAL(&(tv[1].tv_sec), modification_py, &overflow))
+    {
+        if (overflow)
+            PyErr_SetString(PyExc_ValueError, "unable to convert modification time seconds to timeval");
+        return 0;
+    }
+    if (!INTEGRAL_ASSIGNMENT_FITS(&(tv[1].tv_usec), modification_us))
+    {
+        PyErr_SetString(PyExc_ValueError, "unable to convert modification time nanoseconds to timeval");
+        return 0;
+    }
+    return 1;
 }
 
-
-#define BUP_HAVE_BUP_LUTIME_NS 1
-static PyObject *bup_lutime_ns(PyObject *self, PyObject *args)
-{
-    return bup_xutime_ns(self, args, 0);
-}
-
-
-#else /* not defined(HAVE_UTIMENSAT) */
+#endif /* defined(HAVE_UTIMES) || defined(HAVE_LUTIMES) */
 
 
 #ifdef HAVE_UTIMES
-#define BUP_HAVE_BUP_UTIME_NS 1
-static PyObject *bup_utime_ns(PyObject *self, PyObject *args)
+static PyObject *bup_utimes(PyObject *self, PyObject *args)
 {
-    int rc;
     char *path;
-    long access, access_ns, modification, modification_ns;
     struct timeval tv[2];
-
-    if (!bup_parse_xutime_args(&path, &access, &access_ns,
-                               &modification, &modification_ns,
-                               self, args))
-       return NULL;
-
-    tv[0].tv_sec = access;
-    tv[0].tv_usec = access_ns / 1000;
-    tv[1].tv_sec = modification;
-    tv[1].tv_usec = modification_ns / 1000;
-    rc = utimes(path, tv);
+    if (!bup_parse_xutimes_args(&path, tv, args))
+        return NULL;
+    int rc = utimes(path, tv);
     if (rc != 0)
         return PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-
     return Py_BuildValue("O", Py_None);
 }
 #endif /* def HAVE_UTIMES */
 
 
 #ifdef HAVE_LUTIMES
-#define BUP_HAVE_BUP_LUTIME_NS 1
-static PyObject *bup_lutime_ns(PyObject *self, PyObject *args)
+static PyObject *bup_lutimes(PyObject *self, PyObject *args)
 {
-    int rc;
     char *path;
-    long access, access_ns, modification, modification_ns;
     struct timeval tv[2];
-
-    if (!bup_parse_xutime_args(&path, &access, &access_ns,
-                               &modification, &modification_ns,
-                               self, args))
-       return NULL;
-
-    tv[0].tv_sec = access;
-    tv[0].tv_usec = access_ns / 1000;
-    tv[1].tv_sec = modification;
-    tv[1].tv_usec = modification_ns / 1000;
-    rc = lutimes(path, tv);
+    if (!bup_parse_xutimes_args(&path, tv, args))
+        return NULL;
+    int rc = lutimes(path, tv);
     if (rc != 0)
         return PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
 
     return Py_BuildValue("O", Py_None);
 }
 #endif /* def HAVE_LUTIMES */
-
-
-#endif /* not defined(HAVE_UTIMENSAT) */
 
 
 #ifdef HAVE_STAT_ST_ATIM
@@ -944,74 +1067,18 @@ static PyObject *bup_lutime_ns(PyObject *self, PyObject *args)
 #endif
 
 
-static void set_invalid_timespec_msg(const char *field,
-                                     const long long sec,
-                                     const long nsec,
-                                     const char *filename,
-                                     int fd)
-{
-    if (filename != NULL)
-        PyErr_Format(PyExc_ValueError,
-                     "invalid %s timespec (%lld %ld) for file \"%s\"",
-                     field, sec, nsec, filename);
-    else
-        PyErr_Format(PyExc_ValueError,
-                     "invalid %s timespec (%lld %ld) for file descriptor %d",
-                     field, sec, nsec, fd);
-}
-
-
-static int normalize_timespec_values(const char *name,
-                                     long long *sec,
-                                     long *nsec,
-                                     const char *filename,
-                                     int fd)
-{
-    if (*nsec < -999999999 || *nsec > 999999999)
-    {
-        set_invalid_timespec_msg(name, *sec, *nsec, filename, fd);
-        return 0;
-    }
-    if (*nsec < 0)
-    {
-        if (*sec == LONG_MIN)
-        {
-            set_invalid_timespec_msg(name, *sec, *nsec, filename, fd);
-            return 0;
-        }
-        *nsec += 1000000000;
-        *sec -= 1;
-    }
-    return 1;
-}
-
-
-#define INTEGER_TO_PY(x) \
-    (((x) >= 0) ? PyLong_FromUnsignedLongLong(x) : PyLong_FromLongLong(x))
-
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wtautological-compare" // For INTEGER_TO_PY().
 
 static PyObject *stat_struct_to_py(const struct stat *st,
                                    const char *filename,
                                    int fd)
 {
-    long long atime = st->st_atime;
-    long long mtime = st->st_mtime;
-    long long ctime = st->st_ctime;
-    long atime_ns = BUP_STAT_ATIME_NS(st);
-    long mtime_ns = BUP_STAT_MTIME_NS(st);
-    long ctime_ns = BUP_STAT_CTIME_NS(st);
-
-    if (!normalize_timespec_values("atime", &atime, &atime_ns, filename, fd))
-        return NULL;
-    if (!normalize_timespec_values("mtime", &mtime, &mtime_ns, filename, fd))
-        return NULL;
-    if (!normalize_timespec_values("ctime", &ctime, &ctime_ns, filename, fd))
-        return NULL;
-
     // We can check the known (via POSIX) signed and unsigned types at
     // compile time, but not (easily) the unspecified types, so handle
-    // those via INTEGER_TO_PY().
-    return Py_BuildValue("OKOOOOOL(Ll)(Ll)(Ll)",
+    // those via INTEGER_TO_PY().  Assumes ns values will fit in a
+    // long.
+    return Py_BuildValue("OKOOOOOL(Ol)(Ol)(Ol)",
                          INTEGER_TO_PY(st->st_mode),
                          (unsigned PY_LONG_LONG) st->st_ino,
                          INTEGER_TO_PY(st->st_dev),
@@ -1020,14 +1087,15 @@ static PyObject *stat_struct_to_py(const struct stat *st,
                          INTEGER_TO_PY(st->st_gid),
                          INTEGER_TO_PY(st->st_rdev),
                          (PY_LONG_LONG) st->st_size,
-                         (PY_LONG_LONG) atime,
-                         (long) atime_ns,
-                         (PY_LONG_LONG) mtime,
-                         (long) mtime_ns,
-                         (PY_LONG_LONG) ctime,
-                         (long) ctime_ns);
+                         INTEGER_TO_PY(st->st_atime),
+                         (long) BUP_STAT_ATIME_NS(st),
+                         INTEGER_TO_PY(st->st_mtime),
+                         (long) BUP_STAT_MTIME_NS(st),
+                         INTEGER_TO_PY(st->st_ctime),
+                         (long) BUP_STAT_CTIME_NS(st));
 }
 
+#pragma clang diagnostic pop  // ignored "-Wtautological-compare"
 
 static PyObject *bup_stat(PyObject *self, PyObject *args)
 {
@@ -1113,13 +1181,17 @@ static PyMethodDef helper_methods[] = {
     { "set_linux_file_attr", bup_set_linux_file_attr, METH_VARARGS,
       "Set the Linux attributes for the given file." },
 #endif
-#ifdef BUP_HAVE_BUP_UTIME_NS
-    { "bup_utime_ns", bup_utime_ns, METH_VARARGS,
-      "Change path timestamps with up to nanosecond precision." },
+#ifdef HAVE_UTIMENSAT
+    { "bup_utimensat", bup_utimensat, METH_VARARGS,
+      "Change path timestamps with nanosecond precision (POSIX)." },
 #endif
-#ifdef BUP_HAVE_BUP_LUTIME_NS
-    { "bup_lutime_ns", bup_lutime_ns, METH_VARARGS,
-      "Change path timestamps with up to nanosecond precision;"
+#ifdef HAVE_UTIMES
+    { "bup_utimes", bup_utimes, METH_VARARGS,
+      "Change path timestamps with microsecond precision." },
+#endif
+#ifdef HAVE_LUTIMES
+    { "bup_lutimes", bup_lutimes, METH_VARARGS,
+      "Change path timestamps with microsecond precision;"
       " don't follow symlinks." },
 #endif
     { "stat", bup_stat, METH_VARARGS,
@@ -1143,11 +1215,31 @@ PyMODINIT_FUNC init_helpers(void)
     assert(sizeof(blkcnt_t) <= sizeof(PY_LONG_LONG));
     // Just be sure (relevant when passing timestamps back to Python above).
     assert(sizeof(PY_LONG_LONG) <= sizeof(long long));
+    assert(sizeof(unsigned PY_LONG_LONG) <= sizeof(unsigned long long));
 
     char *e;
     PyObject *m = Py_InitModule("_helpers", helper_methods);
     if (m == NULL)
         return;
+
+#ifdef HAVE_UTIMENSAT
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wtautological-compare" // For INTEGER_TO_PY().
+    {
+        PyObject *value;
+        value = INTEGER_TO_PY(AT_FDCWD);
+        PyObject_SetAttrString(m, "AT_FDCWD", value);
+        Py_DECREF(value);
+        value = INTEGER_TO_PY(AT_SYMLINK_NOFOLLOW);
+        PyObject_SetAttrString(m, "AT_SYMLINK_NOFOLLOW", value);
+        Py_DECREF(value);
+        value = INTEGER_TO_PY(UTIME_NOW);
+        PyObject_SetAttrString(m, "UTIME_NOW", value);
+        Py_DECREF(value);
+    }
+#pragma clang diagnostic pop  // ignored "-Wtautological-compare"
+#endif
+
     e = getenv("BUP_FORCE_TTY");
     istty2 = isatty(2) || (atoi(e ? e : "0") & 2);
     unpythonize_argv();

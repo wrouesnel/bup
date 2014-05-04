@@ -60,7 +60,9 @@ being the most likely choice.
     will be considered a descendant of the old *name*.
     (Thus, you can continually create new datasets with
     the same name, and later view the history of that
-    dataset to see how it has changed over time.)
+    dataset to see how it has changed over time.)  The original data
+    will also be available as a top-level file named "data" in the VFS,
+    accessible via `bup fuse`, `bup ftp`, etc.
 
 -t, \--tree
 :   output the git tree id of the resulting dataset.
@@ -86,12 +88,13 @@ being the most likely choice.
 # OPTIONS
 
 -r, \--remote=*host*:*path*
-:   save the backup set to the given remote server.  If
-    *path* is omitted, uses the default path on the remote
-    server (you still need to include the ':').  The connection to the
-    remote server is made with SSH.  If you'd like to specify which port, user
-    or private key to use for the SSH connection, we recommend you use the
-    `~/.ssh/config` file.
+:   save the backup set to the given remote server.  If *path* is
+    omitted, uses the default path on the remote server (you still
+    need to include the ':').  The connection to the remote server is
+    made with SSH.  If you'd like to specify which port, user or
+    private key to use for the SSH connection, we recommend you use
+    the `~/.ssh/config` file.  Even though the destination is remote,
+    a local bup repository is still required.
 
 -d, \--date=*seconds-since-epoch*
 :   specify the date inscribed in the commit (seconds since 1970-01-01).
@@ -153,8 +156,8 @@ being the most likely choice.
     is 1 (fast, loose compression)
 
 
-# EXAMPLE
-    
+# EXAMPLES
+
     $ tar -cf - /etc | bup split -r myserver: -n mybackup-tar
     tar: Removing leading /' from member names
     Indexing objects: 100% (196/196), done.

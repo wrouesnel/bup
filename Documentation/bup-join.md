@@ -26,16 +26,15 @@ join` reads them from stdin instead.
 # OPTIONS
 
 -r, \--remote=*host*:*path*
-:   Retrieves objects from the given remote repository
-    instead of the local one. *path* may be blank, in which
-    case the default remote repository is used.  The connection to the
-    remote server is made with SSH.  If you'd like to specify which port, user
-    or private key to use for the SSH connection, we recommend you use the
-    `~/.ssh/config` file.
+:   Retrieves objects from the given remote repository instead of the
+    local one. *path* may be blank, in which case the default remote
+    repository is used.  The connection to the remote server is made
+    with SSH.  If you'd like to specify which port, user or private
+    key to use for the SSH connection, we recommend you use the
+    `~/.ssh/config` file.  Even though the data source is remote, a
+    local bup repository is still required.
 
-
-# EXAMPLE
-
+# EXAMPLES
     # split and then rejoin a file using its tree id
     TREE=$(tar -cvf - /etc | bup split -t)
     bup join $TREE | tar -tf -

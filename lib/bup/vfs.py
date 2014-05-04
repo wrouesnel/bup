@@ -6,6 +6,7 @@ and abstracts internal name mangling and storage from the exposition layer.
 import os, re, stat, time
 from bup import git, metadata
 from helpers import *
+from bup.git import BUP_NORMAL, BUP_CHUNKED
 from bup.hashsplit import GIT_MODE_TREE, GIT_MODE_FILE
 
 EMPTY_SHA='\0'*20
@@ -162,7 +163,7 @@ class _FileReader(object):
         pass
 
 
-class Node:
+class Node(object):
     """Base class for file representation."""
     def __init__(self, parent, name, mode, hash):
         self.parent = parent
@@ -174,8 +175,9 @@ class Node:
         self._metadata = None
 
     def __repr__(self):
-        return "<%s object at X - name:%r hash:%s parent:%r>" \
-            % (self.__class__, self.name, self.hash.encode('hex'),
+        return "<%s object at %s - name:%r hash:%s parent:%r>" \
+            % (self.__class__, hex(id(self)),
+               self.name, self.hash.encode('hex'),
                self.parent.name if self.parent else None)
 
     def __cmp__(a, b):
@@ -298,15 +300,20 @@ class Node:
         """Open the current node. It is an error to open a non-file node."""
         raise NotFile('%s is not a regular file' % self.name)
 
-    def _populate_metadata(self):
+    def _populate_metadata(self, force=False):
         # Only Dirs contain .bupm files, so by default, do nothing.
         pass
 
     def metadata(self):
         """Return this Node's Metadata() object, if any."""
-        if self.parent:
-            self.parent._populate_metadata()
+        if not self._metadata and self.parent:
+            self.parent._populate_metadata(force=True)
         return self._metadata
+
+    def release(self):
+        """Release resources that can be automatically restored (at a cost)."""
+        self._metadata = None
+        self._subs = None
 
 
 class File(Node):
@@ -395,20 +402,23 @@ class FakeSymlink(Symlink):
 class Dir(Node):
     """A directory stored inside of bup's repository."""
 
-    def __init__(self, *args):
-        Node.__init__(self, *args)
+    def __init__(self, *args, **kwargs):
+        Node.__init__(self, *args, **kwargs)
         self._bupm = None
 
-    def _populate_metadata(self):
+    def _populate_metadata(self, force=False):
+        if self._metadata and not force:
+            return
         if not self._subs:
             self._mksubs()
         if not self._bupm:
             return
         meta_stream = self._bupm.open()
-        self._metadata = metadata.Metadata.read(meta_stream)
+        dir_meta = metadata.Metadata.read(meta_stream)
         for sub in self:
             if not stat.S_ISDIR(sub.mode):
                 sub._metadata = metadata.Metadata.read(meta_stream)
+        self._metadata = dir_meta
 
     def _mksubs(self):
         self._subs = {}
@@ -421,7 +431,9 @@ class Dir(Node):
         assert(type == 'tree')
         for (mode,mangled_name,sha) in git.tree_decode(''.join(it)):
             if mangled_name == '.bupm':
-                self._bupm = File(self, mangled_name, mode, sha, git.BUP_NORMAL)
+                bupmode = stat.S_ISDIR(mode) and BUP_CHUNKED or BUP_NORMAL
+                self._bupm = File(self, mangled_name, GIT_MODE_FILE, sha,
+                                  bupmode)
                 continue
             name = mangled_name
             (name,bupmode) = git.demangle_name(mangled_name)
@@ -444,6 +456,11 @@ class Dir(Node):
         if not self._subs:
             self._mksubs()
         return self._bupm
+
+    def release(self):
+        """Release restorable resources held by this node."""
+        self._bupm = None
+        super(Dir, self).release()
 
 
 class CommitDir(Node):

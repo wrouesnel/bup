@@ -31,6 +31,13 @@ def atof(s):
 buglvl = atoi(os.environ.get('BUP_DEBUG', 0))
 
 
+# If the platform doesn't have fdatasync (OS X), fall back to fsync.
+try:
+    fdatasync = os.fdatasync
+except AttributeError:
+    fdatasync = os.fsync
+
+
 # Write (blockingly) to sockets that may or may not be in blocking mode.
 # We need this because our stderr is sometimes eaten by subprocesses
 # (probably ssh) that sometimes make it nonblocking, if only temporarily,
@@ -173,9 +180,11 @@ def unlink(f):
 def readpipe(argv):
     """Run a subprocess and return its output."""
     p = subprocess.Popen(argv, stdout=subprocess.PIPE)
-    r = p.stdout.read()
-    p.wait()
-    return r
+    out, err = p.communicate()
+    if p.returncode != 0:
+        raise Exception('subprocess %r failed with status %d'
+                        % (' '.join(argv), p.returncode))
+    return out
 
 
 def realpath(p):
@@ -618,6 +627,26 @@ def mmap_readwrite_private(f, sz = 0, close=True):
                     close)
 
 
+def parse_timestamp(epoch_str):
+    """Return the number of nanoseconds since the epoch that are described
+by epoch_str (100ms, 100ns, ...); when epoch_str cannot be parsed,
+throw a ValueError that may contain additional information."""
+    ns_per = {'s' :  1000000000,
+              'ms' : 1000000,
+              'us' : 1000,
+              'ns' : 1}
+    match = re.match(r'^((?:[-+]?[0-9]+)?)(s|ms|us|ns)$', epoch_str)
+    if not match:
+        if re.match(r'^([-+]?[0-9]+)$', epoch_str):
+            raise ValueError('must include units, i.e. 100ns, 100ms, ...')
+        raise ValueError()
+    (n, units) = match.group(1, 2)
+    if not n:
+        n = 1
+    n = int(n)
+    return n * ns_per[units]
+
+
 def parse_num(s):
     """Parse data size information into a float number.
 
@@ -735,19 +764,33 @@ def parse_excludes(options, fatal):
                 raise fatal("couldn't read %s" % parameter)
             for exclude_path in f.readlines():
                 excluded_paths.append(realpath(exclude_path.strip()))
-    return excluded_paths
+    return sorted(frozenset(excluded_paths))
 
 
 def parse_rx_excludes(options, fatal):
     """Traverse the options and extract all rx excludes, or call
     Option.fatal()."""
-    rxs = [v for f, v in options if f == '--exclude-rx']
-    for i in range(len(rxs)):
-        try:
-            rxs[i] = re.compile(rxs[i])
-        except re.error, ex:
-            o.fatal('invalid --exclude-rx pattern (%s):' % (ex, rxs[i]))
-    return rxs
+    excluded_patterns = []
+
+    for flag in options:
+        (option, parameter) = flag
+        if option == '--exclude-rx':
+            try:
+                excluded_patterns.append(re.compile(parameter))
+            except re.error, ex:
+                fatal('invalid --exclude-rx pattern (%s): %s' % (parameter, ex))
+        elif option == '--exclude-rx-from':
+            try:
+                f = open(realpath(parameter))
+            except IOError, e:
+                raise fatal("couldn't read %s" % parameter)
+            for pattern in f.readlines():
+                spattern = pattern.rstrip('\n')
+                try:
+                    excluded_patterns.append(re.compile(spattern))
+                except re.error, ex:
+                    fatal('invalid --exclude-rx pattern (%s): %s' % (spattern, ex))
+    return excluded_patterns
 
 
 def should_rx_exclude_path(path, exclude_rxs):

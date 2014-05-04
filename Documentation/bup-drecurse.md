@@ -9,7 +9,8 @@ bup-drecurse - recursively list files in your filesystem
 # SYNOPSIS
 
 bup drecurse [-x] [-q] [\--exclude *path*]
-[\--exclude-from *filename*] [\--profile] \<path\>
+\ [\--exclude-from *filename*] [\--exclude-rx *pattern*]
+\ [\--exclude-rx-from *filename*] [\--profile] \<path\>
 
 # DESCRIPTION
 
@@ -30,26 +31,35 @@ come after its children, making this easy.
 # OPTIONS
 
 -x, \--xdev, \--one-file-system
-:   don't cross filesystem boundaries.
+:   don't cross filesystem boundaries -- though as with tar and rsync,
+    the mount points themselves will still be reported.
 
 -q, \--quiet
 :   don't print filenames as they are encountered.  Useful
     when testing performance of the traversal algorithms.
 
 \--exclude=*path*
-:   a path to exclude from the backup (can be used more
-    than once)
+:   exclude *path* from the backup (may be repeated).
 
 \--exclude-from=*filename*
-:   a file that contains exclude paths (can be used more
-    than once)
+:   read --exclude paths from *filename*, one path per-line (may be
+    repeated).
     
+\--exclude-rx=*pattern*
+:   exclude any path matching *pattern*.  See `bup-index`(1) for
+    details, but note that unlike index, drecurse will produce
+    relative paths if the drecurse target is a relative path. (may be
+    repeated).
+
+\--exclude-rx-from=*filename*
+:   read --exclude-rx patterns from *filename*, one pattern per-line
+    (may be repeated).
+
 \--profile
 :   print profiling information upon completion.  Useful
     when testing performance of the traversal algorithms.
     
-# EXAMPLE
-
+# EXAMPLES
     bup drecurse -x /
 
 # SEE ALSO

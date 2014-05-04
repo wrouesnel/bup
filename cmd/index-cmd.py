@@ -163,6 +163,7 @@ def update_index(tops, excluded_paths, exclude_rxs, new_graft_points):
 
     total = 0
     bup_dir = os.path.abspath(git.repo())
+    index_start = time.time()
     for top, top_path in tops:
         # graft the real top to bup top
         grafted_top = graftpath(new_graft_points, top)    
@@ -177,8 +178,12 @@ def update_index(tops, excluded_paths, exclude_rxs, new_graft_points):
             if opt.verbose>=2 or (opt.verbose==1 and stat.S_ISDIR(pst.st_mode)):
                 sys.stdout.write('Src: %s\nInd: %s\n' % (path, grafted_path))
                 sys.stdout.flush()
+                elapsed = time.time() - index_start
+                paths_per_sec = total / elapsed if elapsed else 0
                 qprogress('Indexing: %d\r' % total)
             elif not (total % 128):
+                elapsed = time.time() - index_start
+                paths_per_sec = total / elapsed if elapsed else 0
                 qprogress('Indexing: %d\r' % total)
             total += 1
             while rig.cur and rig.cur.name > grafted_path:  # deleted paths
@@ -316,6 +321,8 @@ def rename_files_in_index(paths, new_graft_points):
                     hlinks.del_path(rig.cur.name)
                 rig.next()
     
+    elapsed = time.time() - index_start
+    paths_per_sec = total / elapsed if elapsed else 0
     progress('Renaming: %d, done.\n' % total)
     
     hlinks.prepare_save()
@@ -410,6 +417,7 @@ def delete_files_in_index(tops, new_graft_points):
     msw.close()
     hlinks.commit_save()
 
+
 optspec = """
 bup index <-p|m|s|u> [options...] <filenames...>
 --
@@ -421,7 +429,7 @@ u,update   recursively update the index entries for the given file/dir names (de
 rename     mark files in index as moved but not changed. paths must be given as *oldname*=*newname*
 delete     mark files in the index as deleted without needing to do a full update.
 check      carefully check index file integrity
-clear      clear the index
+clear      clear the default index
 regraft    remap modified files real filesystem paths according to new graft points (needs --graft)
  Options:
 graft=    a graft point of *old_path*=*new_path* (can be used more then once)
@@ -431,9 +439,10 @@ no-check-device don't invalidate an entry if the containing device changes
 fake-valid mark all index entries as up-to-date even if they aren't
 fake-invalid mark all index entries as invalid
 f,indexfile=  the name of the index file (normally BUP_DIR/bupindex)
-exclude=   a path to exclude from the backup (can be used more than once)
-exclude-from= a file that contains exclude paths (can be used more than once)
-exclude-rx= skip paths that match the unanchored regular expression
+exclude= a path to exclude from the backup (may be repeated)
+exclude-from= skip --exclude paths in file (may be repeated)
+exclude-rx= skip paths matching the unanchored regex (may be repeated)
+exclude-rx-from= skip --exclude-rx patterns in file (may be repeated)
 v,verbose  increase log output (can be used more than once)
 x,xdev,one-file-system  don't cross filesystem boundaries
 """

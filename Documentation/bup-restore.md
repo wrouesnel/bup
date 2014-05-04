@@ -8,8 +8,8 @@ bup-restore - extract files from a backup set
 
 # SYNOPSIS
 
-bup restore [\--outdir=*outdir*] [\--exclude-rx *pattern*] [-v] [-q]
-\<paths...\>
+bup restore [\--outdir=*outdir*] [\--exclude-rx *pattern*]
+[\--exclude-rx-from *filename*] [-v] [-q] \<paths...\>
 
 # DESCRIPTION
 
@@ -117,6 +117,10 @@ See the EXAMPLES section for a demonstration.
       * '/foo/.' - exclude the content of any directory named foo
       * '^/tmp/.' - exclude root-level /tmp's content, but not /tmp itself
 
+\--exclude-rx-from=*filename*
+:   read --exclude-rx patterns from *filename*, one pattern per-line
+    (may be repeated).
+
 \--map-user *old*=*new*
 :   for every path, restore the *old* (saved) user name as *new*.
     Specifying "" for *new* will clear the user.  For example
@@ -155,8 +159,8 @@ See the EXAMPLES section for a demonstration.
     a tty, a progress display is printed that shows the
     total number of files restored.
 
-# EXAMPLE
-    
+# EXAMPLES
+
 Create a simple test backup set:
     
     $ bup index -u /etc

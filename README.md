@@ -71,13 +71,17 @@ Reasons you might want to avoid bup
    for you, but we don't know why.  It is also missing some
    probably-critical features.
    
- - It requires python >= 2.5, a C compiler, and an installed git version >=
-   1.5.3.1.
+ - It requires python >= 2.5, a C compiler, and an installed git
+   version >= 1.5.3.1.  It also requires par2 if you want fsck to be
+   able to generate the information needed to recover from some types
+   of corruption.
  
  - It currently only works on Linux, MacOS X >= 10.4,
    NetBSD, Solaris, or Windows (with Cygwin).  Patches to support
    other platforms are welcome.
-   
+
+ - Any items in "Things that are stupid" below.
+
    
 Getting started
 ===============
@@ -90,19 +94,22 @@ From source
  
         git clone git://github.com/bup/bup
 
- - Install the needed python libraries (including the development
+ - Install the required python libraries (including the development
    libraries).
 
-   On Debian/Ubuntu this is usually sufficient (run as root):
+   On very recent Debian/Ubuntu versions, this may be sufficient (run
+   as root):
 
-            apt-get install python2.6-dev python-fuse
+            apt-get build-dep bup
+
+   Otherwise try this (substitute python2.5-dev or python2.6-dev if
+   you have an older system):
+
+            apt-get install python2.7-dev python-fuse
             apt-get install python-pyxattr python-pylibacl
             apt-get install linux-libc-dev
-
-   Substitute python2.5-dev if you have an older system.  Alternately,
-   on newer Debian/Ubuntu versions, you can try this:
-    
-            apt-get build-dep bup
+            apt-get install acl attr
+            apt-get install python-tornado # optional
 
    On CentOS (for CentOS 6, at least), this should be sufficient (run
    as root):
@@ -117,6 +124,11 @@ From source
 
    On Cygwin, install python, make, rsync, and gcc4.
 
+   If you would like to use the optional bup web server on systems
+   without a tornado package, you may want to try this:
+
+            pip install tornado
+
  - Build the python module and symlinks:
 
         make
@@ -126,7 +138,7 @@ From source
         make test
  	
     (The tests should pass.  If they don't pass for you, stop here and send
-    me an email.)
+     an email to bup-list@googlegroups.com.)
 
  - You can install bup via "make install", and override the default
    destination with DESTDIR and PREFIX.
@@ -155,15 +167,78 @@ Binary packages of bup are known to be built for the following OSes:
 Using bup
 ---------
 
- - Initialize the default BUP_DIR:
+ - Get help for any bup command:
+
+        bup help
+        bup help init
+        bup help index
+        bup help save
+        bup help restore
+        ...
+
+ - Initialize the default BUP_DIR (~/.bup):
 
         bup init
 
- - Try making a local backup as a tar file:
+ - Make a local backup (-v or -vv will increase the verbosity):
+
+        bup index /etc
+        bup save -n local-etc /etc
+
+ - Restore a local backup to ./dest:
+
+        bup restore -C ./dest local-etc/latest/etc
+        ls -l dest/etc
+
+ - Look at how much disk space your backup took:
+
+        du -s ~/.bup
+
+ - Make another backup (which should be mostly identical to the last one;
+   notice that you don't have to *specify* that this backup is incremental,
+   it just saves space automatically):
+
+        bup index /etc
+        bup save -n local-etc /etc
+
+ - Look how little extra space your second backup used (on top of the first):
+
+        du -s ~/.bup
+
+ - Get a list of your previous backups:
+
+        bup ls local-etc
+
+ - Restore your first backup again:
+
+        bup restore -C ./dest-2 local-etc/2013-11-23-11195/etc
+
+ - Make a backup on a remote server (which must already have the 'bup' command
+   somewhere in the server's PATH (see /etc/profile, etc/environment,
+   ~/.profile, or ~/.bashrc), and be accessible via ssh.
+   Make sure to replace SERVERNAME with the actual hostname of your server):
+
+        ssh SERVERNAME bup init
+        bup index /etc
+        bup save -r SERVERNAME: -n local-etc /etc
+
+ - Restore a backup from a remote server.  (FAIL: unfortunately,
+   unlike "bup join", "bup restore" does not yet support remote
+   restores.  See both "bup join" and "Things that are stupid" below.)
+
+ - Defend your backups from death rays (OK fine, more likely from the
+   occasional bad disk block).  This writes parity information
+   (currently via par2) for all of the existing data so that bup may
+   be able to recover from some amount of repository corruption:
+
+        bup fsck -g
+
+ - Use split/join instead of index/save/restore.  Try making a local
+   backup using tar:
  
         tar -cvf - /etc | bup split -n local-etc -vv
  	
- - Try restoring your backup tarball:
+ - Try restoring the tarball:
  
         bup join local-etc | tar -tf -
  	
@@ -171,51 +246,31 @@ Using bup
  
         du -s ~/.bup
  	
- - Make another backup (which should be mostly identical to the last one;
-   notice that you don't have to *specify* that this backup is incremental,
-   it just saves space automatically):
+ - Make another tar backup:
  
         tar -cvf - /etc | bup split -n local-etc -vv
  	
- - Look how little extra space your second backup used on top of the first:
+ - Look at how little extra space your second backup used on top of
+   the first:
  
  	du -s ~/.bup
  	
- - Restore your old backup again (the ~1 is git notation for "one older than
-   the most recent"):
+ - Restore the first tar backup again (the ~1 is git notation for "one
+   older than the most recent"):
    
         bup join local-etc~1 | tar -tf -
  
- - Get a list of your previous backups:
+ - Get a list of your previous split-based backups:
  
         GIT_DIR=~/.bup git log local-etc
 	
- - Make a backup on a remote server (which must already have the 'bup' command
-   somewhere in the server's PATH (see /etc/profile, etc/environment,
-   ~/.profile, or ~/.bashrc), and be accessible via ssh.
-   Make sure to replace SERVERNAME with the actual hostname of your server):
+ - Make a backup on a remote server:
    
         tar -cvf - /etc | bup split -r SERVERNAME: -n local-etc -vv
  
  - Try restoring the remote backup tarball:
  
         bup join -r SERVERNAME: local-etc | tar -tf -
- 	
- - Try using the new (slightly experimental) 'bup index' and 'bup save'
-   style backups, which bypass 'tar' but have some missing features (see
-   "Things that are stupid" below):
-   	
-        bup index -uv /etc
-        bup save -n local-etc /etc
-   	
- - Do it again and see how fast an incremental backup can be:
- 
-        bup index -uv /etc
-        bup save -n local-etc /etc
- 	
-    (You can also use the "-r SERVERNAME:" option to 'bup save', just like
-     with 'bup split' and 'bup join'.  The index itself is always local,
-     so you don't need -r there.)
  	
 That's all there is to it!
 
@@ -258,14 +313,14 @@ Notes on NetBSD/pkgsrc
    traversal code ("fts") in NetBSD's libc will interpret this as a
    cycle and error out, so "ls -R" and "find" will not work.
 
- - It is not clear if extended attribute and POSIX acl support does
-   anything useful.
+ - There is no support for ACLs.  If/when some entrprising person
+   fixes this, adjust t/compare-trees.
 
 
 Notes on Cygwin
 ---------------
 
- - There is no support for ACLs.  If/when some entrprising person
+ - There is no support for ACLs.  If/when some enterprising person
    fixes this, adjust t/compare-trees.
 
  - In t/test.sh, two tests have been disabled.  These tests check to
@@ -279,7 +334,7 @@ Notes on Cygwin
 Notes on OS X
 -------------
 
- - There is no support for ACLs.  If/when some entrprising person
+ - There is no support for ACLs.  If/when some enterprising person
    fixes this, adjust t/compare-trees.
 
 
@@ -287,6 +342,7 @@ How it works
 ============
 
 Basic storage:
+--------------
 
 bup stores its data in a git-formatted repository.  Unfortunately, git
 itself doesn't actually behave very well for bup's use case (huge numbers of
@@ -322,6 +378,7 @@ that tree, respectively, to stdout.  You can use this to construct your own
 scripts that do something with those values.
 
 The bup index:
+--------------
 
 'bup index' walks through your filesystem and updates a file (whose name is,
 by default, ~/.bup/bupindex) to contain the name, attributes, and an
@@ -344,21 +401,31 @@ a lot of files have changed.
 
  
 Things that are stupid for now but which we'll fix later
---------------------------------------------------------
+========================================================
 
 Help with any of these problems, or others, is very welcome.  Join the
 mailing list (see below) if you'd like to help.
 
+ - 'bup restore' can't pull directly from a remote server.
+
+    So in one sense "save -r" is a dead-end right now.  Obviously you
+    can use "ssh SERVER bup restore -C ./dest..." to create a tree you
+    can transfer elsewhere via rsync/tar/whatever, but that's *lame*.
+
+    Until we fix it, you may be able to mount the remote BUP_DIR via
+    sshfs and then restore "normally", though that hasn't been
+    officially tested.
+
  - 'bup save' and 'bup restore' have immature metadata support.
  
     On the plus side, they actually do have support now, but it's new,
-    and not remotely as well tested as tar/rsync/whatever's.  If you'd
-    like to help test, please do (see t/compare-trees for one
-    comparison method).
+    and not remotely as well tested as tar/rsync/whatever's.  However,
+    you have to start somewhere, and as of 0.25, we think it's ready
+    for more general use.  Please let us know if you have any trouble.
 
-    In addition, at the moment, if any strip or graft-style options
-    are specified to 'bup save', then no metadata will be written for
-    the root directory.  That's obviously less than ideal.
+    Also, if any strip or graft-style options are specified to 'bup
+    save', then no metadata will be written for the root directory.
+    That's obviously less than ideal.
 
  - bup is overly optimistic about mmap.  Right now bup just assumes
    that it can mmap as large a block as it likes, and that mmap will
@@ -394,7 +461,7 @@ mailing list (see below) if you'd like to help.
     give the continuous-backup process a really low CPU and I/O priority so
     you wouldn't even know it was running.
 
- - bup currently has no features that prune away *old* backups.
+ - bup currently has no way to prune *old* backups.
  
     Because of the way the packfile system works, backups become "entangled"
     in weird ways and it's not actually possible to delete one pack
@@ -405,6 +472,9 @@ mailing list (see below) if you'd like to help.
     methods aren't really applicable here; bup packfiles are just too huge.
     We'll have to do it in a totally different way.  There are lots of
     options.  For now: make sure you've got lots of disk space :)
+
+    Until we fix this, one possible workaround is to just start a new
+    BUP_DIR occasionally, i.e. bup-2013-10, bup-2013-11...
 
  - bup has never been tested on anything but Linux, MacOS, and Windows+Cygwin.
  
@@ -435,7 +505,7 @@ mailing list (see below) if you'd like to help.
     
     
 More Documentation
-------------------
+==================
 
 bup has an extensive set of man pages.  Try using 'bup help' to get
 started, or use 'bup help SUBCOMMAND' for any bup subcommand (like split,

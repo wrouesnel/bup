@@ -8,7 +8,8 @@ bup restore [-C outdir] </branch/revision/path/to/dir ...>
 --
 C,outdir=   change to given outdir before extracting files
 numeric-ids restore numeric IDs (user, group, etc.) rather than names
-exclude-rx= skip paths that match the unanchored regular expression
+exclude-rx= skip paths matching the unanchored regex (may be repeated)
+exclude-rx-from= skip --exclude-rx patterns in file (may be repeated)
 v,verbose   increase log output (can be used more than once)
 map-user=   given OLD=NEW, restore OLD user as NEW user
 map-group=  given OLD=NEW, restore OLD group as NEW group
@@ -195,6 +196,7 @@ def do_root(n, owner_map, restore_root_meta = True):
         # Directory metadata is the first entry in any .bupm file in
         # the directory.  Get it.
         mfile = n.metadata_file() # VFS file -- cannot close().
+        root_meta = None
         if mfile:
             meta_stream = mfile.open()
             root_meta = metadata.Metadata.read(meta_stream)
@@ -263,6 +265,7 @@ def do_node(top, n, owner_map, meta = None):
     finally:
         if meta_stream:
             meta_stream.close()
+        n.release()
 
 
 handle_ctrl_c()

@@ -1,9 +1,15 @@
 OS:=$(shell uname | sed 's/[-_].*//')
-CFLAGS := -Wall -O2 -Werror $(PYINCLUDE) $(CFLAGS)
+CFLAGS := -Wall -O2 -Werror -Wno-unknown-pragmas $(PYINCLUDE) $(CFLAGS)
 SOEXT:=.so
 
 ifeq ($(OS),CYGWIN)
   SOEXT:=.dll
+endif
+
+ifdef TMPDIR
+  test_tmp := $(TMPDIR)
+else
+  test_tmp := $(CURDIR)/t/tmp
 endif
 
 default: all
@@ -24,7 +30,7 @@ BINDIR=$(DESTDIR)$(PREFIX)/bin
 LIBDIR=$(DESTDIR)$(PREFIX)/lib/bup
 install: all
 	$(INSTALL) -d $(MANDIR)/man1 $(DOCDIR) $(BINDIR) \
-		$(LIBDIR)/bup $(LIBDIR)/cmd $(LIBDIR)/tornado \
+		$(LIBDIR)/bup $(LIBDIR)/cmd \
 		$(LIBDIR)/web $(LIBDIR)/web/static
 	[ ! -e Documentation/.docs-available ] || \
 	  $(INSTALL) -m 0644 \
@@ -44,9 +50,6 @@ install: all
 	$(INSTALL) -pm 0755 \
 		lib/bup/*$(SOEXT) \
 		$(LIBDIR)/bup
-	$(INSTALL) -pm 0644 \
-		lib/tornado/*.py \
-		$(LIBDIR)/tornado
 	$(INSTALL) -pm 0644 \
 		lib/web/static/* \
 		$(LIBDIR)/web/static/
@@ -80,21 +83,30 @@ lib/bup/_version.py:
 runtests: all runtests-python runtests-cmdline
 
 runtests-python: all
-	$(PYTHON) wvtest.py \
-		$(wildcard t/t*.py) \
-		$(filter-out lib/bup/t/tmetadata.py,$(wildcard lib/*/t/t*.py))
-	$(PYTHON) wvtest.py lib/bup/t/tmetadata.py
+	test -e t/tmp || mkdir t/tmp
+	TMPDIR="$(test_tmp)" $(PYTHON) wvtest.py t/t*.py lib/*/t/t*.py
 
 runtests-cmdline: all
-	t/test-cat-file.sh
-	t/test-index-check-device.sh
-	t/test-meta.sh
-	t/test-restore-map-owner.sh
-	t/test-restore-single-file.sh
-	t/test-rm-between-index-and-save.sh
-	t/test-command-without-init-fails.sh
-	t/test-redundant-saves.sh
-	t/test.sh
+	test -e t/tmp || mkdir t/tmp
+	TMPDIR="$(test_tmp)" t/test-drecurse.sh
+	TMPDIR="$(test_tmp)" t/test-cat-file.sh
+	TMPDIR="$(test_tmp)" t/test-compression.sh
+	TMPDIR="$(test_tmp)" t/test-fsck.sh
+	TMPDIR="$(test_tmp)" t/test-index-clear.sh
+	TMPDIR="$(test_tmp)" t/test-index-check-device.sh
+	TMPDIR="$(test_tmp)" t/test-ls.sh
+	TMPDIR="$(test_tmp)" t/test-meta.sh
+	TMPDIR="$(test_tmp)" t/test-on.sh
+	TMPDIR="$(test_tmp)" t/test-restore-map-owner.sh
+	TMPDIR="$(test_tmp)" t/test-restore-single-file.sh
+	TMPDIR="$(test_tmp)" t/test-rm-between-index-and-save.sh
+	TMPDIR="$(test_tmp)" t/test-command-without-init-fails.sh
+	TMPDIR="$(test_tmp)" t/test-redundant-saves.sh
+	TMPDIR="$(test_tmp)" t/test-save-restore-excludes.sh
+	TMPDIR="$(test_tmp)" t/test-save-strip-graft.sh
+	TMPDIR="$(test_tmp)" t/test-import-rdiff-backup.sh
+	TMPDIR="$(test_tmp)" t/test-xdev.sh
+	TMPDIR="$(test_tmp)" t/test.sh
 
 stupid:
 	PATH=/bin:/usr/bin $(MAKE) test
@@ -162,10 +174,10 @@ clean: Documentation/clean config/clean
 		.*~ *~ */*~ lib/*/*~ lib/*/*/*~ \
 		*.pyc */*.pyc lib/*/*.pyc lib/*/*/*.pyc \
 		bup bup-* cmd/bup-* lib/bup/_version.py randomgen memtest \
-		out[12] out2[tc] tags[12] tags2[tc] \
 		testfs.img lib/bup/t/testfs.img
-	umount t/mnt/* || true
+	if test -e t/mnt; then t/cleanup-mounts-under t/mnt; fi
 	if test -e t/mnt; then rm -r t/mnt; fi
+	if test -e t/tmp; then t/cleanup-mounts-under t/tmp; fi
         # FIXME: migrate these to t/mnt/
 	if test -e bupmeta.tmp/testfs; \
 	  then umount bupmeta.tmp/testfs || true; fi
@@ -174,5 +186,5 @@ clean: Documentation/clean config/clean
 	if test -e bupmeta.tmp/testfs-limited; \
 	  then umount bupmeta.tmp/testfs-limited || true; fi
 	rm -rf *.tmp *.tmp.meta t/*.tmp lib/*/*/*.tmp build lib/bup/build lib/bup/t/testfs
-	if test -e t/tmp; then rm -r t/tmp; fi
+	if test -e t/tmp; then t/force-delete t/tmp; fi
 	t/configure-sampledata --clean

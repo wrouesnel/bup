@@ -503,8 +503,8 @@ class Writer:
     def _add(self, ename, entry):
         if self.lastfile and self.lastfile <= ename:
             raise Error('%r must come before %r' 
-                             % (''.join(e.name), ''.join(self.lastfile)))
-            self.lastfile = e.name
+                             % (''.join(ename), ''.join(self.lastfile)))
+        self.lastfile = ename
         self.level = _golevel(self.level, self.f, ename, entry,
                               self.metastore, self.tmax)
 
@@ -532,7 +532,7 @@ class Writer:
         else:
             assert(endswith)
             meta_ofs = self.metastore.store(metadata.Metadata())
-            e = BlankNewEntry(basename, meta_ofs, tmax)
+            e = BlankNewEntry(basename, meta_ofs, self.tmax)
             e.gitmode = gitmode
             e.sha = sha
             e.flags = flags
