@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import os, sys, struct
+import os, sys, struct, shlex
 from bup import options, git
 from bup.helpers import *
 
@@ -31,14 +31,20 @@ def _init_session(reinit_with_new_repopath=None):
 
 
 def init_dir(conn, arg):
-    git.init_repo(arg)
+    if len(arg) > 1:
+        raise Exception("init-dir takes only 1 argument. %i given.\n" % len(arg))
+    path = arg[0]
+    git.init_repo(path)
     debug1('bup server: bupdir initialized: %r\n' % git.repodir)
-    _init_session(arg)
+    _init_session(path)
     conn.ok()
 
 
 def set_dir(conn, arg):
-    _init_session(arg)
+    if len(arg) > 1:
+        raise Exception("set-dir takes only 1 argument. %i given.\n" % len(arg))
+    path = arg[0]
+    _init_session(path)
     conn.ok()
 
     
@@ -53,8 +59,11 @@ def list_indexes(conn, junk):
     conn.ok()
 
 
-def send_index(conn, name):
+def send_index(conn, arg):
+    if len(arg) > 1:
+        raise Exception("send-index takes only 1 argument. %i given.\n" % len(name))
     _init_session()
+    name = arg[0]
     assert(name.find('/') < 0)
     assert(name.endswith('.idx'))
     idx = git.open_idx(git.repo('objects/pack/%s' % name))
@@ -128,14 +137,20 @@ def _check(w, expected, actual, msg):
         raise Exception(msg % (expected, actual))
 
 
-def read_ref(conn, refname):
+def read_ref(conn, arg):
+    if len(arg) > 1:
+        raise Exception("read_ref takes only 1 argument. %i given.\n" % len(arg))
+    refname = arg[0]
     _init_session()
     r = git.read_ref(refname)
     conn.write('%s\n' % (r or '').encode('hex'))
     conn.ok()
 
 
-def update_ref(conn, refname):
+def update_ref(conn, arg):
+    if len(arg) > 1:
+        raise Exception("update_ref takes only 1 argument. %i given.\n" % len(arg))
+    refname = arg[0]
     _init_session()
     newval = conn.readline().strip()
     oldval = conn.readline().strip()
@@ -144,7 +159,10 @@ def update_ref(conn, refname):
 
 
 cat_pipe = None
-def cat(conn, id):
+def cat(conn, arg):
+    if len(arg) > 1:
+        raise Exception("cat takes only 1 argument. %i given.\n" % len(arg))
+    id = arg[0]
     global cat_pipe
     _init_session()
     if not cat_pipe:
@@ -160,7 +178,6 @@ def cat(conn, id):
     else:
         conn.write('\0\0\0\0')
         conn.ok()
-
 
 optspec = """
 bup server
@@ -195,9 +212,9 @@ for _line in lr:
     if not line:
         continue
     debug1('bup server: command: %r\n' % line)
-    words = line.split(' ', 1)
+    words = shlex.split(line)
     cmd = words[0]
-    rest = len(words)>1 and words[1] or ''
+    rest = words[1:]
     if cmd == 'quit':
         break
     else:
