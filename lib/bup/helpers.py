@@ -395,8 +395,9 @@ class NotOk(Exception):
 
 
 class BaseConn:
-    def __init__(self, outp):
+    def __init__(self, outp, quiet=False):
         self.outp = outp
+        self.quiet = quiet # do not print superficial ascii "ok"
 
     def close(self):
         while self._read(65536): pass
@@ -422,6 +423,8 @@ class BaseConn:
 
     def ok(self):
         """Indicate end of output from last sent command."""
+        if self.quiet:
+            return
         self.write('\nok\n')
 
     def error(self, s):
@@ -431,6 +434,12 @@ class BaseConn:
 
     def _check_ok(self, onempty):
         self.outp.flush()
+        
+        # always return success if put in quiet mode. Caller should know
+        # what they're doing when they invoke this.
+        if self.quiet:
+            return None
+        
         rl = ''
         for rl in linereader(self):
             #log('%d got line: %r\n' % (os.getpid(), rl))
@@ -446,7 +455,7 @@ class BaseConn:
         raise Exception('server exited unexpectedly; see errors above')
 
     def drain_and_check_ok(self):
-        """Remove all data for the current command from input stream."""
+        """Remove all data for the current command from input stream."""       
         def onempty(rl):
             pass
         return self._check_ok(onempty)
