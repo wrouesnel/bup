@@ -6,18 +6,15 @@ from bup.helpers import *
 suspended_w = None
 dumb_server_mode = False
 
-
 def do_help(conn, junk):
     conn.write('Commands:\n    %s\n' % '\n    '.join(sorted(commands)))
     conn.ok()
-
 
 def _set_mode():
     global dumb_server_mode
     dumb_server_mode = os.path.exists(git.repo('bup-dumb-server'))
     debug1('bup server: serving in %s mode\n' 
            % (dumb_server_mode and 'dumb' or 'smart'))
-
 
 def _init_session(reinit_with_new_repopath=None):
     if reinit_with_new_repopath is None and git.repodir:
@@ -129,7 +126,18 @@ def receive_objects_v2(conn, junk):
         nw, crc = w._raw_write((buf,), sha=shar)
         _check(w, crcr, crc, 'object read: expected crc %d, got %d\n')
     # NOTREACHED
-    
+
+def quiet_mode(conn, arg):
+    """sets the server to suppress the conn.ok() calls. Useful for
+    talking to the server with non-bup instrumentation. """
+    arg = ''.join(arg).lower()
+    if arg == 'on' or arg == 'true':
+        conn.quiet = True
+    elif arg == 'off' or arg == 'false':
+        conn.quiet = False
+    else:
+        raise Exception('quiet-mode: invalid arguments')
+    conn.ok()
 
 def _check(w, expected, actual, msg):
     if expected != actual:
@@ -198,6 +206,7 @@ commands = {
     'list-indexes': list_indexes,
     'send-index': send_index,
     'receive-objects-v2': receive_objects_v2,
+    'quiet-mode': quiet_mode,
     'read-ref': read_ref,
     'update-ref': update_ref,
     'cat': cat,
