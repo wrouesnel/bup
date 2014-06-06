@@ -680,6 +680,12 @@ def slashappend(s):
     else:
         return s
 
+def slashremove(s):
+    """Remove a "/" from 's' if it ends in a "/"."""
+    if s and s.endswith('/'):
+        return s[:-1]
+    else:
+        return s
 
 def _mmap_do(f, sz, flags, prot, close):
     if not sz:
