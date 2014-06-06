@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 import os, sys, struct, shlex
-from bup import options, git
+import tarfile
+import stat
+from bup import options, git, metadata, vfs, xstat
+from bup.protocol import *
 from bup.helpers import *
 
 suspended_w = None
@@ -127,6 +130,87 @@ def receive_objects_v2(conn, junk):
         _check(w, crcr, crc, 'object read: expected crc %d, got %d\n')
     # NOTREACHED
 
+def _restore_files_tarpipe(conn, req):
+    """restores files by encoding them into a tar
+    """
+    tarmode = "w|" + req.transfermode[3:]
+    tar = tarfile.open(mode=tarmode, fileobj=conn, dereference=False)
+    
+    top = vfs.RefList(None)   # get top of backup tree
+    start = top.resolve(req.bup_path)
+    
+    # get the node iterator for the rest of the restore operation
+    node_iter = vfs.restore_files_iter(conn, start, None)
+    
+    # iterate over all nodes and write them as tar blocks
+    for n in node_iter:
+        # skip directories, since we write full paths to tar files
+        if stat.S_ISDIR(n.mode):
+            continue
+        
+        # Manufacture tar metadata (note: must use fullname to get good results)
+        info = tarfile.TarInfo(name=n.fullname(stop_at=n.fs_top()))
+        info.size = n.size()    # expensive but necessary!
+        
+        # populate metadata 
+        meta = n.metadata()
+        if meta:
+            info.mode = meta.mode
+            info.mtime = xstat.nsecs_to_timespec(meta.mtime)[0]
+            info.ctime = xstat.nsecs_to_timespec(meta.ctime)[0]
+            info.atime = xstat.nsecs_to_timespec(meta.atime)[0]
+            info.uid = meta.uid
+            info.gid = meta.gid
+            info.uname = meta.user
+            info.gname = meta.group
+        else:
+            info.mode = n.mode
+        
+        if stat.S_ISREG(meta.mode):
+            info.type = tarfile.REGTYPE
+        elif stat.S_ISLNK(meta.mode):
+            info.type = tarfile.SYMTYPE
+        elif stat.S_ISCHR(meta.mode):
+            info.type = tarfile.CHRTYPE
+        elif stat.S_ISBLK(meta.mode):
+            info.type = tarfile.BLKTYPE
+        elif stat.S_ISFIFO(meta.mode):
+            info.type = tarfile.FIFOTYPE
+        
+        f = n.open()
+        # handle links separately since they're a bit weird in bup
+        if stat.S_ISLNK(meta.mode):
+            info.linkname = f.read(info.size)
+            tar.addfile(info, None)
+        else:
+            tar.addfile(info, f)
+        f.close()
+    tar.close()
+
+def restore_files(conn, extra):
+    """restore-files mode is used for requesting files from a remote bup
+    repository.
+    """
+    # Server enters restore-files mode
+    _init_session()
+
+    # Get session data
+    req = RestoreSessionRequest.read(conn, extra)
+
+    if req.transfermode.startswith('tar'):
+        # we require quiet mode so reading a tar file straight off can be
+        # accomplished.
+        quiet_mode(conn, 'true')
+        _restore_files_tarpipe(conn, req)
+        # clean exit - we need to close the connection once we're done.
+        # this enables a script to read the tar file directly off the 
+        # pipe.
+        conn.outp.close()
+        conn.close()
+        raise NormalExit()
+    else:
+        raise SessionException('invalid transfer mode for restore files not caught')
+
 def quiet_mode(conn, arg):
     """sets the server to suppress the conn.ok() calls. Useful for
     talking to the server with non-bup instrumentation. """
@@ -206,6 +290,7 @@ commands = {
     'list-indexes': list_indexes,
     'send-index': send_index,
     'receive-objects-v2': receive_objects_v2,
+    'restore-files': restore_files,
     'quiet-mode': quiet_mode,
     'read-ref': read_ref,
     'update-ref': update_ref,
@@ -229,7 +314,10 @@ for _line in lr:
     else:
         cmd = commands.get(cmd)
         if cmd:
-            cmd(conn, rest)
+            try:
+                cmd(conn, rest)
+            except NormalExit:
+                break
         else:
             raise Exception('unknown server command: %r\n' % line)
 
