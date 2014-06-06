@@ -4,7 +4,7 @@ The vfs.py library makes it possible to expose contents from bup's repository
 and abstracts internal name mangling and storage from the exposition layer.
 """
 import os, re, stat, time
-from bup import git, metadata
+from bup import git, metadata, hashsplit
 from helpers import *
 from bup.git import BUP_NORMAL, BUP_CHUNKED, cp
 from bup.hashsplit import GIT_MODE_TREE, GIT_MODE_FILE
@@ -89,6 +89,45 @@ def _chunkiter(hash, startofs):
                 yield b
         else:
             yield ''.join(cp().join(sha.encode('hex')))[skipmore:]
+
+def _sha_iter(hash):
+    """
+    like _chunkiter above, but instead returns hash values for the chunks
+    making up the requested object. Note: don't use this for files which
+    aren't chunked (in that case, their shalist is just their sha).
+    """
+    tree = _tree_decode(hash)
+    
+    for i in xrange(0, len(tree)):
+        (ofs,isdir,sha) = tree[i]
+        if isdir:
+            for b in _sha_iter(sha):
+                yield b
+        else:
+            yield (ofs,sha)
+
+def local_shalist_iter(filename):
+    """Run the bup hashsplit algorithm on a local file, returning the
+    offsets and hashsums without actually writing to a bup repository.
+    """
+    f = hashsplit.open_noatime(filename)
+    ofs = 0
+    for (blob, level) in hashsplit.hashsplit_iter([f], 
+                                                  keep_boundaries=False, 
+                                                  progress=None):
+        size = len(blob)
+        yield (ofs, git.calc_hash('blob', blob), size)
+        ofs += size
+    
+def local_shalist(filename):
+    """Run the bup hashsplit algorithm on a local file, returning the
+    offsets and hashsums without actually writing to a bup repository. 
+    Returns the complete list instead of iterating.
+    """
+    shalist = []
+    for i in local_shalist_iter(filename):
+        shalist.append(i)
+    return shalist
 
 def restore_files_iter(conn, parent, pathstack):
     """callback for restore_files to walk the directory tree in top-down
@@ -359,6 +398,23 @@ class File(Node):
                 self._cached_size = _chunk_len(self.hash)
             debug1('<<<<File.size() done.\n')
         return self._cached_size
+    
+    def hashlist_iter(self):
+        """Iterator version of the hashlist, providing direct access
+        to the underlying generators.
+        """
+        if (self.bupmode == git.BUP_CHUNKED):
+            for i in _sha_iter(self.hash):
+                yield i
+        else:
+            yield (0, self.hash)
+    
+    def hashlist(self):
+        """Get the SHA list this file produces when split by bup"""
+        shalist = []
+        for i in self.hashlist_iter():
+            shalist.append(i)
+        return shalist
 
 _symrefs = 0
 class Symlink(File):
