@@ -2,7 +2,8 @@
 import os, sys, struct, shlex
 import tarfile
 import stat
-from bup import options, git, metadata, vfs, xstat
+from collections import deque
+from bup import options, git, metadata, vfs, xstat, vint
 from bup.protocol import *
 from bup.helpers import *
 
@@ -130,6 +131,111 @@ def receive_objects_v2(conn, junk):
         _check(w, crcr, crc, 'object read: expected crc %d, got %d\n')
     # NOTREACHED
 
+def _restore_files_blob_request(conn, req, hashpipeline):
+    """Process a pipeline request object and send hashlists
+    """
+    for (start,length) in req:
+        for i in range(start):
+            self.popleft()  # discard objects being skipped
+        # TODO: It would be more efficient to send blob-runs as one big
+        # object and lose the header overhead.
+        RestoreHeader(RestoreHeader.H_BLOBS).write(conn) # header
+        Blobs.create_from_pipeline(hashpipeline, length).write(conn)
+
+def _restore_files_hashlist_request(conn, req, metapipeline, hashpipeline):
+    """Process a pipeline request object and send hashlists
+    """
+    for (start,length) in req:
+        for i in range(start):
+            self.popleft()  # discard objects being skipped
+        
+        # TODO: how should we determine how much to do at once?
+        RestoreHeader(RestoreHeader.H_HASHLIST).write(conn) # header
+        hs = Hashlists.create_from_pipeline(metapipeline, length)
+        hs.write(conn, hashpipeline)
+
+def _restore_files_metadata_request(conn, req, 
+                                    metapipeline, pathstack, node_iter):
+    """Handle normal pipelined metadata requests from a client process.
+    """
+    # Since we can't actually know we won't run out of metadata to send before
+    # completing the metadata request, we buffer up in memory first, then
+    # send it. Even then, if there's a lot of buffered up metadata requests
+    # then we may send a lot of finished packets.
+    send_queue = deque()    # deque's are faster then lists for linear things
+    finished = False
+    
+    # Pop ranges off the request and process them
+    try:
+        for (start,length) in req:
+            # move to start of span
+            for i in range(start):
+                node_iter.next()
+            # iterate over span and make nodes
+            for i in range(length):
+                node = node_iter.next()
+                pmeta = ProtocolMetadata.create_from_node(node, pathstack)
+                send_queue.append((node, pmeta))
+    except StopIteration:
+        finished = True
+
+    RestoreHeader(RestoreHeader.H_METADATA).write(conn) # header
+    vint.write_vuint(conn, len(send_queue)) # size
+    
+    for (node,pmeta) in send_queue: # LIFO
+        pmeta.write(conn)   # write protocol metadata
+        # Only pipeline if object can return a hashlist (dirs cannot)
+        if not pmeta.meta.isdir():
+            metapipeline.append(node)   # store node in meta pipeline
+    
+    # Iteration finished during this range
+    if finished:
+        RestoreHeader(RestoreHeader.H_FINISHED).write(conn)
+
+def _restore_files_bup_transfer(conn, req):
+    """restore files using the bup transfer mode
+    """
+    debug1('bup server: bup transfermode')
+    metapipeline = deque()
+    hashpipeline = deque()
+    pathstack = PathStack()
+    
+    debug1('bup server: waiting for initial client metadata request\n')
+    top = vfs.RefList(None)   # get top of backup tree
+    start = top.resolve(req.bup_path)
+    
+    start.name = '' # we never reuse this node, but we don't want to send the
+                    # name either since the client already knows it.
+
+    # get the node iterator for the rest of the restore operation
+    node_iter = vfs.restore_files_iter(conn, start, pathstack)
+    while True:
+        try:
+            clientheader = RestoreHeader.read(conn)
+        except HeaderException, e:
+            raise RestoreException('unknown header type', None, 
+                                  inner_exception=e)
+
+        # None data types - immediate action needed
+        if clientheader.type == RestoreHeader.H_FAILED:
+            debug1('bup server: client error. aborting operation\n')
+            raise RestoreException('client reported operation failed.',
+                                  clientheader)
+        elif clientheader.type == RestoreHeader.H_FINISHED:
+            debug1('bup server: client requested finish.')
+            break
+                
+        # requesting types
+        req = PipelineRequest.read(conn)
+        if clientheader.type == RestoreHeader.H_BLOBS:
+            _restore_files_blob_request(conn, req, hashpipeline)
+        elif clientheader.type == RestoreHeader.H_HASHLIST:
+            _restore_files_hashlist_request(conn, req, metapipeline, 
+                                            hashpipeline)
+        elif clientheader.type == RestoreHeader.H_METADATA:
+            _restore_files_metadata_request(conn, req, metapipeline, 
+                                            pathstack, node_iter)
+
 def _restore_files_tarpipe(conn, req):
     """restores files by encoding them into a tar
     """
@@ -196,8 +302,11 @@ def restore_files(conn, extra):
 
     # Get session data
     req = RestoreSessionRequest.read(conn, extra)
-
-    if req.transfermode.startswith('tar'):
+    
+    if req.transfermode == 'bup':
+        # bup differential transfer mode
+        _restore_files_bup_transfer(conn, req)   
+    elif req.transfermode.startswith('tar'):
         # we require quiet mode so reading a tar file straight off can be
         # accomplished.
         quiet_mode(conn, 'true')
