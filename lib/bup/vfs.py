@@ -90,7 +90,29 @@ def _chunkiter(hash, startofs, repo_dir=None):
         else:
             yield ''.join(cp(repo_dir).join(sha.encode('hex')))[skipmore:]
 
+def restore_files_iter(conn, parent, pathstack):
+    """callback for restore_files to walk the directory tree in top-down
+    order. This lives in VFS since we can use it locally and remotely.
+    """
+    yield parent    # yield parent
+    if pathstack is not None:
+        pathstack.push(parent.name)
 
+    # iterate over files first
+    dirs = []
+    for n in parent:
+        if stat.S_ISDIR(n.mode):
+            dirs.append(n)
+        else:
+            yield n
+
+    # then recurse into directories
+    for d in dirs:
+        for i in restore_files_iter(conn, d, pathstack):
+            yield i
+    if pathstack is not None:
+        pathstack.pop()
+    
 class _ChunkReader:
     def __init__(self, hash, isdir, startofs, repo_dir=None):
         if isdir:
@@ -343,7 +365,6 @@ class File(Node):
                                                repo_dir = self._repo_dir)
             debug1('<<<<File.size() done.\n')
         return self._cached_size
-
 
 _symrefs = 0
 class Symlink(File):
