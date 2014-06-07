@@ -10,6 +10,9 @@ list is bup-list@googlegroups.com
 
 #Current development branches:
 ##index-grafts
+
+> This branch is currently being refactored to improve disk space usage during indexing.
+
 Support for highly graftable indexes to enable easy use of bup
 with relocatable roots, or directory trees with subtle differences
 (i.e. when backing up home directories across Windows and Linux)
@@ -58,3 +61,18 @@ $ bup save -N www /
 ```
 
 **NOTE**: --regraft respects the --no-check-device flag but generally shouldn't need it since the files it scans will be marked for upload anyway.
+
+##remote-restore-server-protocols
+This is the first draft of a set of protocols for bup-server to enable remote restore. It contains purely the modifications to `bup-server`, but also `protocol.py` which can be imported to provide the objects needed to work with the protocols.
+
+The biggest addition is bup-server can restore a backup as a tar file piped over stdout. This can be driven using a shell one liner like the following:
+
+```bash
+$ echo "restore-files --transfermode=tar /mybackupname/latest" | ssh user@host bup-server | tar -x -C local-destination-directory/
+```
+
+The effect of this command is bup-server creates a tar-file which is then immediately extracted over the SSH connection to the target directory.
+
+It's important to note this is not a flawless process - the Python `tarfile` module does not support encoding the same range of metadata parameters as `bup` does, and so only POSIX common parameters will be restored this way.
+
+Full remote restore functionality is coming.
