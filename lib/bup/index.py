@@ -552,6 +552,14 @@ def _is_traversable(rp, p, prev,
         if parentpath == '':
             parentpath = '/'
         debug2('checking traversability: %s\n' % parentpath)
+        # check we can traverse directories to reach path
+        try:
+            os.listdir(parentpath)
+        except OSError, e:
+            debug1("keeping %s since parent cannot be traversed\n" \
+                       % p)
+            traversable = False
+            break
         # check that all parent paths are on the same device node
         parent_st = os.lstat(parentpath)
         if xdev and (parent_st.st_dev != st.st_dev):
