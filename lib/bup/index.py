@@ -534,8 +534,37 @@ class Writer:
         self.flush()
         return Reader(self.tmpname)
 
+def _is_traversable(rp, p, prev, 
+                    xdev):
+    """helper function for reduce_paths to determine if a *real* filesystem
+    path can be reached by drecurse from a parent path.
+    :rp : real path to object
+    :p  : relative path (as supplied by user)
+    :prev : parent object we are considering as superceding
+    """
+    st = os.lstat(rp)
+    # check the path under consideration is traversable (not excluded
+    # by a parent, not fenced in by a device boundary
+    traversable = True
+    pc = rp.split(os.sep)[:-1]  # list of parent elements
+    for i,e in reversed(list(enumerate(pc))):
+        parentpath = (os.sep).join(pc[:i])  # get a parent path
+        if parentpath == '':
+            parentpath = '/'
+        debug2('checking traversability: %s\n' % parentpath)
+        # check that all parent paths are on the same device node
+        parent_st = os.lstat(parentpath)
+        if xdev and (parent_st.st_dev != st.st_dev):
+            debug1("keeping %s since parent is filesystem boundary\n" \
+                       % p)
+            traversable = False
+            break
+        if parentpath == prev: # don't check beyond parent
+            break
+    return traversable
 
-def reduce_paths(paths):
+def reduce_paths(paths,realfs=False
+                 xdev=False):
     xpaths = []
     for p in paths:
         rp = realpath(p)
@@ -552,9 +581,17 @@ def reduce_paths(paths):
     paths = []
     prev = None
     for (rp, p) in xpaths:
-        if prev and (prev == rp 
+        traversable = True
+        # traversability tests only make sense on real filesystems
+        if realfs:  
+            traversable = _is_traversable(rp, p, prev, 
+                                          xdev)
+        
+        if prev and traversable and (prev == rp 
                      or (prev.endswith('/') and rp.startswith(prev))):
+            debug1("removing superceded path: %s\n" % p)
             continue # already superceded by previous path
+        # not superceded (or not traversable by parent paths)
         paths.append((rp, p))
         prev = rp
     paths.sort(reverse=True)

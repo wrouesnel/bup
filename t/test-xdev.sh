@@ -71,6 +71,22 @@ WVPASSEQ "$(cd src-restore/src && find . -not -name lost+found | sort)" ".
 ./1
 ./mnt"
 
+# Test that --xdev shadowing detection works correctly
+WVSTART 'index -x [shadow detection]'
+WVPASS rm -r "$BUP_DIR" src-restore
+WVPASS bup init
+WVPASS bup index -x src src/mnt
+WVPASS bup save -n src src
+WVPASS mkdir src-restore
+WVPASS bup restore -C src-restore "/src/latest$(pwd)/"
+WVPASSEQ "$(bup drecurse src-restore | grep -vF lost+found)" "src-restore/src/mnt/x/3
+src-restore/src/mnt/x/
+src-restore/src/mnt/2
+src-restore/src/mnt/
+src-restore/src/1
+src-restore/src/
+src-restore/"
+
 WVPASS popd
 WVPASS umount "$tmpdir/src/mnt"
 WVPASS rm -r "$tmpdir"
