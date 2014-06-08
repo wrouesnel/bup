@@ -53,6 +53,29 @@ WVPASSEQ "$(bup ls "exclude/latest/$tmpdir/src/")" "a
 b
 f"
 
+# bup index --exclude shadow detection
+WVSTART 'index --exclude [shadow detection]'
+WVPASS force-delete src "$BUP_DIR"
+WVPASS bup init
+WVPASS mkdir src
+WVPASS mkdir -p src/parent/child/grandchild
+WVPASS bup random 512 >src/a
+WVPASS bup random 512 >src/parent/b
+WVPASS bup random 512 >src/parent/child/c
+WVPASS bup random 512 >src/parent/child/grandchild/d
+WVPASS bup index -u --exclude src/parent src src/parent/child/grandchild
+WVPASS bup save -n exclude-shadow src
+WVPASS mkdir exclude-shadow
+WVPASS bup restore -C exclude-shadow "/exclude-shadow/latest$(pwd)/"
+WVPASSEQ "$(bup drecurse exclude-shadow | grep -vF lost+found)" \
+"exclude-shadow/src/parent/child/grandchild/d
+exclude-shadow/src/parent/child/grandchild/
+exclude-shadow/src/parent/child/
+exclude-shadow/src/parent/
+exclude-shadow/src/a
+exclude-shadow/src/
+exclude-shadow/"
+WVPASS force-delete src-restore
 
 WVSTART "index --exclude-from"
 WVPASS force-delete src "$BUP_DIR"

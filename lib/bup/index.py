@@ -535,7 +535,8 @@ class Writer:
         return Reader(self.tmpname)
 
 def _is_traversable(rp, p, prev, 
-                    xdev):
+                    xdev,
+                    excluded_paths):
     """helper function for reduce_paths to determine if a *real* filesystem
     path can be reached by drecurse from a parent path.
     :rp : real path to object
@@ -552,6 +553,13 @@ def _is_traversable(rp, p, prev,
         if parentpath == '':
             parentpath = '/'
         debug2('checking traversability: %s\n' % parentpath)
+        # check against exclude rules
+        if excluded_paths:
+            if parentpath in excluded_paths:
+                debug1("keeping %s since it would be excluded by parent\n" \
+                       % p)
+                traversable = False
+                break
         # check we can traverse directories to reach path
         try:
             os.listdir(parentpath)
@@ -571,8 +579,9 @@ def _is_traversable(rp, p, prev,
             break
     return traversable
 
-def reduce_paths(paths,realfs=False
-                 xdev=False):
+def reduce_paths(paths, realfs=False, 
+                 xdev=False,
+                 excluded_paths=None):
     xpaths = []
     for p in paths:
         rp = realpath(p)
@@ -593,7 +602,8 @@ def reduce_paths(paths,realfs=False
         # traversability tests only make sense on real filesystems
         if realfs:  
             traversable = _is_traversable(rp, p, prev, 
-                                          xdev)
+                                          xdev,
+                                          excluded_paths)
         
         if prev and traversable and (prev == rp 
                      or (prev.endswith('/') and rp.startswith(prev))):

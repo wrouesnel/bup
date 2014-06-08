@@ -251,7 +251,8 @@ if opt.clear:
 excluded_paths = parse_excludes(flags, o.fatal)
 exclude_rxs = parse_rx_excludes(flags, o.fatal)
 paths = index.reduce_paths(extra, realfs=True,
-                           xdev=opt.xdev)
+                           xdev=opt.xdev,
+                           excluded_paths=excluded_paths)
 
 prev_paths = []
 
