@@ -62,7 +62,7 @@ def clear_index(indexfile):
                 raise
 
 
-def update_index(top, excluded_paths, exclude_rxs):
+def update_index(top, prev_tops, excluded_paths, exclude_rxs):
     # tmax and start must be epoch nanoseconds.
     tmax = (time.time() - 1) * 10**9
     ri = index.Reader(indexfile)
@@ -97,11 +97,14 @@ def update_index(top, excluded_paths, exclude_rxs):
             qprogress('Indexing: %d (%d paths/s)\r' % (total, paths_per_sec))
         total += 1
         while rig.cur and rig.cur.name > path:  # deleted paths
-            if rig.cur.exists():
-                rig.cur.set_deleted()
-                rig.cur.repack()
-                if rig.cur.nlink > 1 and not stat.S_ISDIR(rig.cur.mode):
-                    hlinks.del_path(rig.cur.name)
+            # don't mark as deleted paths under previous nodes that we
+            # already updated this run through.
+            if not rig.cur.name.startswith(prev_tops):
+                if rig.cur.exists():
+                    rig.cur.set_deleted()
+                    rig.cur.repack()
+                    if rig.cur.nlink > 1 and not stat.S_ISDIR(rig.cur.mode):
+                        hlinks.del_path(rig.cur.name)
             rig.next()
         if rig.cur and rig.cur.name == path:    # paths that already existed
             try:
@@ -249,11 +252,15 @@ excluded_paths = parse_excludes(flags, o.fatal)
 exclude_rxs = parse_rx_excludes(flags, o.fatal)
 paths = index.reduce_paths(extra)
 
+prev_paths = []
+
 if opt.update:
     if not extra:
         o.fatal('update mode (-u) requested but no paths given')
     for (rp,path) in paths:
-        update_index(rp, excluded_paths, exclude_rxs)
+        debug1('starting indexing %s : %s\n' % (rp, path))
+        update_index(rp, tuple(prev_paths), excluded_paths, exclude_rxs)
+        prev_paths.append(rp)
 
 if opt['print'] or opt.status or opt.modified:
     for (name, ent) in index.Reader(indexfile).filter(extra or ['']):
