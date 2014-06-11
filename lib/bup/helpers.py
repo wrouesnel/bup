@@ -671,6 +671,11 @@ def slashappend(s):
     else:
         return s
 
+def eatslash(s):
+    if s.endswith('/'):
+        return s[:-1]
+    else:
+        return s
 
 def _mmap_do(f, sz, flags, prot, close):
     if not sz:
