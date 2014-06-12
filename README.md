@@ -76,3 +76,7 @@ The effect of this command is bup-server creates a tar-file which is then immedi
 It's important to note this is not a flawless process - the Python `tarfile` module does not support encoding the same range of metadata parameters as `bup` does, and so only POSIX common parameters will be restored this way.
 
 Full remote restore functionality is coming.
+
+##bup-webdav
+This branch adds read-only WebDAV support to the `bup web` command, enabling it to be mounted by WebDAV-compatible clients and read-directly.
+
