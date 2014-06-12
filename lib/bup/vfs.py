@@ -476,8 +476,23 @@ class CommitDir(Node):
     def __init__(self, parent, name, repo_dir=None):
         Node.__init__(self, parent, name, GIT_MODE_TREE, EMPTY_SHA, repo_dir)
 
+    # We need to override all elements which might have dynamic content, and
+    # sensibly regenerate it.
+    def subs(self):
+        self._mksubs()
+        return Node.subs(self)
+    
+    def sub(self, name):
+        # Only update if 'name' not found to avoid slowing down path resolving.
+        if self._subs is not None:
+            if not self._subs.has_key(name):
+                self._mksubs()
+        return Node.sub(self, name)
+
     def _mksubs(self):
-        self._subs = {}
+	if self._subs is None:
+            self._subs = {}
+
         refs = git.list_refs(repo_dir = self._repo_dir)
         for ref in refs:
             #debug2('ref name: %s\n' % ref[0])
@@ -505,12 +520,28 @@ class CommitList(Node):
         Node.__init__(self, parent, name, GIT_MODE_TREE, EMPTY_SHA, repo_dir)
         self.commits = {}
 
+    # We need to override all elements which might have dynamic content, and
+    # sensibly regenerate it.
+    def subs(self):
+        self._mksubs()
+        return Node.subs(self)
+    
+    def sub(self, name):
+        # Only update if 'name' not found to avoid slowing down path resolving.
+        if self._subs is not None:
+            if not self._subs.has_key(name):
+                self._mksubs()
+        return Node.sub(self, name)
+
     def _mksubs(self):
-        self._subs = {}
+        if self._subs is None:
+            self._subs = {}
+        
         for (name, (hash, date)) in self.commits.items():
-            n1 = Dir(self, name, GIT_MODE_TREE, hash, self._repo_dir)
-            n1.ctime = n1.mtime = date
-            self._subs[name] = n1
+            if not self._subs.has_key(name):
+                n1 = Dir(self, name, GIT_MODE_TREE, hash, self._repo_dir)
+                n1.ctime = n1.mtime = date
+                self._subs[name] = n1
 
 
 class TagDir(Node):
@@ -518,18 +549,33 @@ class TagDir(Node):
     def __init__(self, parent, name, repo_dir = None):
         Node.__init__(self, parent, name, GIT_MODE_TREE, EMPTY_SHA, repo_dir)
 
+    # We need to override all elements which might have dynamic content, and
+    # sensibly regenerate it.
+    def subs(self):
+        self._mksubs()
+        return Node.subs(self)
+    
+    def sub(self, name):
+        # Only update if 'name' not found to avoid slowing down path resolving.
+        if self._subs is not None:
+            if not self._subs.has_key(name):
+                self._mksubs()
+        return Node.sub(self, name)
+
     def _mksubs(self):
-        self._subs = {}
+        if self._subs is None:
+            self._subs = {}
         for (name, sha) in git.list_refs(repo_dir = self._repo_dir):
             if name.startswith('refs/tags/'):
                 name = name[10:]
-                date = git.get_commit_dates([sha.encode('hex')],
-                                            repo_dir=self._repo_dir)[0]
-                commithex = sha.encode('hex')
-                target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
-                tag1 = FakeSymlink(self, name, target, repo_dir, self._repo_dir)
-                tag1.ctime = tag1.mtime = date
-                self._subs[name] = tag1
+                if not self._subs.has_key(name):
+                    date = git.get_commit_dates([sha.encode('hex')],
+                                                repo_dir=self._repo_dir)[0]
+                    commithex = sha.encode('hex')
+                    target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
+                    tag1 = FakeSymlink(self, name, target, repo_dir, self._repo_dir)
+                    tag1.ctime = tag1.mtime = date
+                    self._subs[name] = tag1
 
 
 class BranchList(Node):
@@ -541,8 +587,17 @@ class BranchList(Node):
     def __init__(self, parent, name, hash, repo_dir=None):
         Node.__init__(self, parent, name, GIT_MODE_TREE, hash, repo_dir)
 
-    def _mksubs(self):
-        self._subs = {}
+    # We need to override all elements which might have dynamic content, and
+    # sensibly regenerate it.
+    def subs(self):
+        self._mksubs()
+        return Node.subs(self)
+    
+    def sub(self, name):
+        if self._subs is not None:
+            if not self._subs.has_key(name) or name == 'latest':
+                self._mksubs()
+        return Node.sub(self, name)
 
         tags = git.tags(repo_dir = self._repo_dir)
 
@@ -552,17 +607,24 @@ class BranchList(Node):
         for (date, commit) in revs:
             l = time.localtime(date)
             ls = time.strftime('%Y-%m-%d-%H%M%S', l)
-            commithex = commit.encode('hex')
-            target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
-            n1 = FakeSymlink(self, ls, target, self._repo_dir)
-            n1.ctime = n1.mtime = date
-            self._subs[ls] = n1
+            # TODO: handle removed keys
+            if not self._subs.has_key(ls):
+                commithex = commit.encode('hex')
+                target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
+                n1 = FakeSymlink(self, ls, target, self._repo_dir)
+                n1.ctime = n1.mtime = date
+                self._subs[ls] = n1
 
+            # FIXME: do we *really* want to handle tags?
             for tag in tags.get(commit, []):
-                t1 = FakeSymlink(self, tag, target, self._repo_dir)
-                t1.ctime = t1.mtime = date
-                self._subs[tag] = t1
+                # TODO: handle removed keys
+                if not self._subs.has_key(tag):
+                    t1 = FakeSymlink(self, tag, target, self._repo_dir)
+                    t1.ctime = t1.mtime = date
+                    self._subs[tag] = t1
 
+        # Always update latest (cheap operation, and guaranteed to change if
+        # we add anything else).
         (date, commit) = latest
         commithex = commit.encode('hex')
         target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
@@ -583,14 +645,29 @@ class RefList(Node):
     def __init__(self, parent, repo_dir=None):
         Node.__init__(self, parent, '/', GIT_MODE_TREE, EMPTY_SHA, repo_dir)
 
+    # We need to override all elements which might have dynamic content, and
+    # sensibly regenerate it.
+    def subs(self):
+        self._mksubs()
+        return Node.subs(self)
+    
+    def sub(self, name):
+        # Only update if 'name' not found to avoid slowing down path resolving.
+        if self._subs is not None:
+            if not self._subs.has_key(name):
+                self._mksubs()
+        return Node.sub(self, name)
+
     def _mksubs(self):
-        self._subs = {}
+        # If initing for the first time, we need a new dict.
+        if self._subs is None:
+            self._subs = {}
 
-        commit_dir = CommitDir(self, '.commit', self._repo_dir)
-        self._subs['.commit'] = commit_dir
+            commit_dir = CommitDir(self, '.commit', self._repo_dir)
+            self._subs['.commit'] = commit_dir
 
-        tag_dir = TagDir(self, '.tag', self._repo_dir)
-        self._subs['.tag'] = tag_dir
+            tag_dir = TagDir(self, '.tag', self._repo_dir)
+            self._subs['.tag'] = tag_dir
 
         refs_info = [(name[11:], sha) for (name,sha)
                      in git.list_refs(repo_dir=self._repo_dir)
@@ -599,6 +676,8 @@ class RefList(Node):
                                       for (name, sha) in refs_info],
                                      repo_dir=self._repo_dir)
         for (name, sha), date in zip(refs_info, dates):
-            n1 = BranchList(self, name, sha, self._repo_dir)
-            n1.ctime = n1.mtime = date
-            self._subs[name] = n1
+            # Only initialize if we don't have it. Preserve in-memory caching.
+            if not self._subs.has_key(name):
+                n1 = BranchList(self, name, sha, self._repo_dir)
+                n1.ctime = n1.mtime = date
+                self._subs[name] = n1
