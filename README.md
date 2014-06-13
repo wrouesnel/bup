@@ -12,6 +12,7 @@ list is bup-list@googlegroups.com
 ##index-grafts
 
 > This branch is currently being refactored to improve disk space usage during indexing.
+> The new branch is index-grafts-v2
 
 Support for highly graftable indexes to enable easy use of bup
 with relocatable roots, or directory trees with subtle differences
@@ -80,3 +81,5 @@ Full remote restore functionality is coming.
 ##bup-webdav
 This branch adds read-only WebDAV support to the `bup web` command, enabling it to be mounted by WebDAV-compatible clients and read-directly.
 
+##dynamic-vfs
+This branch adds proper support for a dynamic view of a bup repository via the VFS subsystem. This feature enhances any existing VFS using system like bup-fuse or bup-web without further changes.
