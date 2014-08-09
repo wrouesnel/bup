@@ -854,6 +854,25 @@ def parse_excludes(options, fatal):
                     excluded_paths.append(exclude_path)
     return sorted(frozenset(excluded_paths))
 
+def parse_logical_excludes(options, fatal):
+    """Traverse the options and extract all logical exclude paths.
+    A logical exclude path does not refer to the filesystem, and so is
+    processed 'as is' and matching is done after grafting.
+    call Option.fatal() on failure."""
+    excluded_paths = []
+
+    for flag in options:
+        (option, parameter) = flag
+        if option == '--exclude-logical':
+            excluded_paths.append(parameter)
+        elif option == '--exclude-logical-from':
+            try:
+                f = open(realpath(parameter))
+            except IOError, e:
+                raise fatal("couldn't read %s" % parameter)
+            for exclude_path in f.readlines():
+                excluded_paths.append(exclude_path.strip())
+    return tuple(sorted(frozenset(excluded_paths)))
 
 def parse_rx_excludes(options, fatal):
     """Traverse the options and extract all rx excludes, or call

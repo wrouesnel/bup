@@ -8,9 +8,10 @@ bup-index - print and/or update the bup filesystem index
 
 # SYNOPSIS
 
-bup index \<-p|-m|-s|-u|\--clear|\--check\> [-H] [-l] [-x] [\--fake-valid]
-[\--no-check-device] [\--fake-invalid] [-f *indexfile*] [\--exclude *path*]
-[\--exclude-from *filename*] [\--exclude-rx *pattern*]
+bup index \<-p|-m|-s|-u|\--regraft|\--rename|\--delete> [-H] [-l] [-x] 
+[\--fake-valid] [\--no-check-device] [\--fake-invalid] [\--check] [\--clear] 
+[\--graft <*oldpath*=*newpath*>] [-f *indexfile*] [\--exclude *path*] 
+[\--exclude-from *filename*] [\--exclude-rx *pattern*] 
 [\--exclude-rx-from *filename*] [-v] \<filenames...\>
 
 # DESCRIPTION
@@ -111,15 +112,96 @@ does, due to the accommodations described above.
     that a file is marked in the index as added, modified,
     deleted, or unchanged since the last backup.
 
-\--check
-:   carefully check index file integrity before and after
-    updating.  Mostly useful for automated tests.
+\--regraft
+:	change the real path of files marked as modified to match
+	options supplied by the --graft parameter. This option can
+	be used to quickly update index locations when files may be
+	marked as modified from one filesystem, but uploaded from
+	another (i.e. a snapshotted volume).
+	
+	Example:
+	
+	Index a home directory:
+		
+		$ bup index -um --graft /home/user=/ /home/user
+		
+	Regraft the home directory to the real location it will be 
+	saved from:
+		
+		$ bup index --regraft --graft /home/user/snapshot/today=/
+		
+	Then save:
+		$ bup save -N home /  
 
-\--clear
-:   clear the default index.
+\--rename
+:	mark files in the index as moved but not changed. Filenames should be
+	specified as *oldname*=*newname* on the command line.
+	
+	Example:
+	
+	A file has been indexed previously, but has been renamed:
+		
+		$ bup index --rename /home/user/foo=/home/user/bar
+		
+	This command should only be used when the files genuinely contain the
+	same content. If the files are edited without another index update
+	being performed, then bup will "miss" the change.
 
+\--delete
+:	mark files in the index as being deleted. Filenames should be specified
+	as normal.
+	
+	Example:
+	
+	A file has been indexed previously, but is now deleted:
+	
+		$ bup index --delete /home/user/foo
+		
+	This command is a convenience to allow files to be marked as deleted
+	without spending the time to completely re-index and update a set of
+	directories.
 
 # OPTIONS
+
+\--graft *oldpath*=*newpath*
+:   treat files indexed under *oldpath* as though they were
+    really under *newpath* in the index. This is useful for
+    snapshot backups where the path-prefix of a directory
+    tree may change from backup to backup to prevent bup
+    rereading file contents everytime. If *oldpath* is given
+    as a relative path, it will be evaluated against the
+    current working directory. *newpath* is always treated
+    as an absolute path.
+    
+    Note: --graft will cause `bup index` to treat any file
+    under *oldpath* which maps to an existing entry in the
+    index under *newpath* as being the same file, and will
+    only compare metadata to determine if it should be backed
+    up again. In the unlikely event that two files have
+    identical metadata but dissimilar content, using --graft
+    will cause `bup index` to miss the change. 
+    
+    Usually this option should be used with --no-check-device to 
+    avoid spurious update detection (since a mounted snapshot
+    will frequently have a different device id to the normal
+    filesystem).
+    
+    Example:
+    
+    Backup a home directory:
+    
+        $ bup index -um --graft /home/user=/ /home/user
+        $ bup save -n homedirectory /
+
+    Relocate the home directory:
+    
+        $ mv /home/user /home/user2
+
+    Only backup files which have actually changed since the last
+    backup:
+    
+        $ bup index -um --graft /home/different_user=/ /home/user2
+        $ bup save -n homedirectory /
 
 -H, \--hash
 :   for each file printed, prepend the most recently
@@ -151,6 +233,13 @@ does, due to the accommodations described above.
 \--fake-invalid
 :   mark specified filenames as not up-to-date, forcing the
     next "bup save" run to re-check their contents.
+    
+\--check
+:   carefully check index file integrity before and after
+    updating.  Mostly useful for automated tests.
+
+\--clear
+:   clear the default index.
 
 -f, \--indexfile=*indexfile*
 :   use a different index filename instead of

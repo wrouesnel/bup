@@ -2,6 +2,7 @@
 
 import sys, stat, time, os, errno, re
 from bup import metadata, options, git, index, drecurse, hlinkdb
+from bup import xstat
 from bup.helpers import *
 from bup.hashsplit import GIT_MODE_TREE, GIT_MODE_FILE
 
@@ -50,7 +51,10 @@ def check_index(reader):
 
 
 def clear_index(indexfile):
-    indexfiles = [indexfile, indexfile + '.meta', indexfile + '.hlink']
+    indexfiles = [indexfile, \
+                  indexfile + '.meta', \
+                  indexfile + '.hlink', \
+                  indexfile + '.grafts']
     for indexfile in indexfiles:
         path = git.repo(indexfile)
         try:
@@ -61,17 +65,68 @@ def clear_index(indexfile):
             if e.errno != errno.ENOENT:
                 raise
 
+def regraft_index(new_graft_points):
+    ri = index.Reader(indexfile)
+    hlinks = hlinkdb.HLinkDB(indexfile + '.hlink')
+    msr = index.MetaStoreReader(indexfile + '.meta')
+    msw = index.MetaStoreWriter(indexfile + '.meta')
+    gw = index.GraftsWriter(indexfile + '.grafts')
+    gr = index.GraftsReader(indexfile + '.grafts')
 
-def update_index(top, excluded_paths, exclude_rxs):
+    tstart = int(time.time()) * 10**9
+
+    bup_dir = os.path.abspath(git.repo())
+    total = 0
+    
+    # Sort graft points by bup archive path in order of length
+    new_graft_points.sort(reverse=True, key=lambda graft: graft[1])
+
+    # Iterate on each graft point separately    
+    for (fsprefix, bupprefix) in new_graft_points:
+        rig = IterHelper(ri.iter(name=bupprefix))
+        while rig.cur:
+            # Ungrafting should give us a new real path
+            newrealpath, newgraftroot = index.regraftpath(new_graft_points, 
+                                                          rig.cur.name)
+            # Do we need to update?
+            if newrealpath is not None:
+                # Do the regraft
+                graft_ind, oldgraftroot = gr.graft_at(rig.cur.graft_ofs)
+                graft_ofs = gw.store(graft_ind, newgraftroot)
+                rig.cur.graft_ofs = graft_ofs
+
+                # If fake invalid, do so here...
+                if not (rig.cur.flags & index.IX_HASHVALID):
+                    if opt.fake_valid:
+                        rig.cur.fake_validate()
+                if opt.fake_invalid:
+                    rig.cur.invalidate()
+                rig.cur.repack()
+                # Log the operation
+                if opt.verbose>=2:
+                    sys.stdout.write('Bup: %s\nFS: %s\n' % 
+                                     (rig.cur.name, newrealpath))
+                    sys.stdout.flush()
+            # Update progress
+            if not (total % 128):
+                qprogress('Regrafting: %d\r' % total)
+            total += 1
+                
+            rig.next()
+
+def update_index(top, excluded_paths, exclude_rxs, 
+                 excluded_logical_paths, new_graft_points):
     # tmax and start must be epoch nanoseconds.
     tmax = (time.time() - 1) * 10**9
     ri = index.Reader(indexfile)
     msw = index.MetaStoreWriter(indexfile + '.meta')
     wi = index.Writer(indexfile, msw, tmax)
-    rig = IterHelper(ri.iter(name=top))
+
     tstart = int(time.time()) * 10**9
 
     hlinks = hlinkdb.HLinkDB(indexfile + '.hlink')
+
+    gw = index.GraftsWriter(indexfile + '.grafts')
 
     hashgen = None
     if opt.fake_valid:
@@ -81,12 +136,23 @@ def update_index(top, excluded_paths, exclude_rxs):
     total = 0
     bup_dir = os.path.abspath(git.repo())
     index_start = time.time()
+
+    # graft the real top to bup top
+    grafted_top = index.graftpath(new_graft_points, top)[0]    
+      
+    rig = IterHelper(ri.iter(name=grafted_top))
     for (path,pst) in drecurse.recursive_dirlist([top], xdev=opt.xdev,
                                                  bup_dir=bup_dir,
                                                  excluded_paths=excluded_paths,
                                                  exclude_rxs=exclude_rxs):
+        # convert path to bup archive form
+        (grafted_path, oldprefix, graftind) = index.graftpath(new_graft_points, \
+                                                              path)
+        if excluded_logical_paths:
+            if grafted_path.startswith(excluded_logical_paths):
+                continue # skip this path
         if opt.verbose>=2 or (opt.verbose==1 and stat.S_ISDIR(pst.st_mode)):
-            sys.stdout.write('%s\n' % path)
+            sys.stdout.write('%s\n' % grafted_path)
             sys.stdout.flush()
             elapsed = time.time() - index_start
             paths_per_sec = total / elapsed if elapsed else 0
@@ -96,14 +162,14 @@ def update_index(top, excluded_paths, exclude_rxs):
             paths_per_sec = total / elapsed if elapsed else 0
             qprogress('Indexing: %d (%d paths/s)\r' % (total, paths_per_sec))
         total += 1
-        while rig.cur and rig.cur.name > path:  # deleted paths
+        while rig.cur and rig.cur.name > grafted_path:  # deleted paths
             if rig.cur.exists():
                 rig.cur.set_deleted()
                 rig.cur.repack()
                 if rig.cur.nlink > 1 and not stat.S_ISDIR(rig.cur.mode):
                     hlinks.del_path(rig.cur.name)
             rig.next()
-        if rig.cur and rig.cur.name == path:    # paths that already existed
+        if rig.cur and rig.cur.name == grafted_path:    # paths that already existed
             try:
                 meta = metadata.from_path(path, statinfo=pst)
             except (OSError, IOError), e:
@@ -113,7 +179,7 @@ def update_index(top, excluded_paths, exclude_rxs):
             if not stat.S_ISDIR(rig.cur.mode) and rig.cur.nlink > 1:
                 hlinks.del_path(rig.cur.name)
             if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
-                hlinks.add_path(path, pst.st_dev, pst.st_ino)
+                hlinks.add_path(grafted_path, pst.st_dev, pst.st_ino)
             # Clear these so they don't bloat the store -- they're
             # already in the index (since they vary a lot and they're
             # fixed length).  If you've noticed "tmax", you might
@@ -128,12 +194,12 @@ def update_index(top, excluded_paths, exclude_rxs):
             # in from_stat().
             meta.ctime = meta.mtime = meta.atime = 0
             meta_ofs = msw.store(meta)
-            rig.cur.from_stat(pst, meta_ofs, tstart,
+            graft_ofs = gw.store(graftind, oldprefix)
+            rig.cur.from_stat(pst, meta_ofs, graft_ofs, tstart,
                               check_device=opt.check_device)
             if not (rig.cur.flags & index.IX_HASHVALID):
-                if hashgen:
-                    (rig.cur.gitmode, rig.cur.sha) = hashgen(path)
-                    rig.cur.flags |= index.IX_HASHVALID
+                if opt.fake_valid:
+                    rig.cur.fake_validate()
             if opt.fake_invalid:
                 rig.cur.invalidate()
             rig.cur.repack()
@@ -147,9 +213,11 @@ def update_index(top, excluded_paths, exclude_rxs):
             # See same assignment to 0, above, for rationale.
             meta.atime = meta.mtime = meta.ctime = 0
             meta_ofs = msw.store(meta)
-            wi.add(path, pst, meta_ofs, hashgen = hashgen)
+            graft_ofs = gw.store(graftind, oldprefix)
+            wi.add(grafted_path, pst, meta_ofs, graft_ofs, 
+                   hashgen = hashgen)
             if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
-                hlinks.add_path(path, pst.st_dev, pst.st_ino)
+                hlinks.add_path(grafted_path, pst.st_dev, pst.st_ino)
 
     elapsed = time.time() - index_start
     paths_per_sec = total / elapsed if elapsed else 0
@@ -180,6 +248,7 @@ def update_index(top, excluded_paths, exclude_rxs):
     else:
         wi.close()
 
+    gw.close()
     msw.close()
     hlinks.commit_save()
 
@@ -192,9 +261,13 @@ p,print    print the index entries for the given names (also works with -u)
 m,modified print only added/deleted/modified files (implies -p)
 s,status   print each filename with a status char (A/M/D) (implies -p)
 u,update   recursively update the index entries for the given file/dir names (default if no mode is specified)
+rename     mark files in index as moved but not changed. paths must be given as *oldname*=*newname*
+delete     mark files in the index as deleted without needing to do a full update.
 check      carefully check index file integrity
 clear      clear the default index
+regraft    remap modified files real filesystem paths according to new graft points (needs --graft)
  Options:
+graft=    a graft point of *old_path*=*new_path* (can be used more then once)
 H,hash     print the hash for each object next to its name
 l,long     print more information about each file
 no-check-device don't invalidate an entry if the containing device changes
@@ -202,7 +275,9 @@ fake-valid mark all index entries as up-to-date even if they aren't
 fake-invalid mark all index entries as invalid
 f,indexfile=  the name of the index file (normally BUP_DIR/bupindex)
 exclude= a path to exclude from the backup (may be repeated)
+exclude-logical= a path to exclude based on its grafted form (may be repeated)
 exclude-from= skip --exclude paths in file (may be repeated)
+exclude-logical-from= skip --exclude-logical paths in a file (may be repeated)
 exclude-rx= skip paths matching the unanchored regex (may be repeated)
 exclude-rx-from= skip --exclude-rx patterns in file (may be repeated)
 v,verbose  increase log output (can be used more than once)
@@ -215,15 +290,35 @@ if not (opt.modified or \
         opt['print'] or \
         opt.status or \
         opt.update or \
+        opt.rename or \
+        opt.delete or \
         opt.check or \
-        opt.clear):
+        opt.clear or \
+        opt.regraft):
     opt.update = 1
-if (opt.fake_valid or opt.fake_invalid) and not opt.update:
-    o.fatal('--fake-{in,}valid are meaningless without -u')
+if (opt.fake_valid or opt.fake_invalid) and not (opt.update or opt.regraft):
+    o.fatal('--fake-{in,}valid are meaningless without -u or --regraft')
 if opt.fake_valid and opt.fake_invalid:
     o.fatal('--fake-valid is incompatible with --fake-invalid')
 if opt.clear and opt.indexfile:
     o.fatal('cannot clear an external index (via -f)')
+
+# TODO: regraft isn't strictly incompatible with update. maybe this should be
+# allowed? (note: it would involve regrafting, then just running update as normal)
+if opt.regraft and opt.update:
+    o.fatal('--regraft is incompatible with update')
+if opt.regraft and extra:
+    o.fatal('--regraft does not accept a path')
+if opt.regraft and not opt.graft:
+    o.fatal('--regraft requires --graft')
+
+# TODO: regraft may also not be incompatible here
+if opt.rename and (opt.update or opt.delete or opt.regraft): 
+    o.fatal('--rename is incompatible with update, delete and regraft modes.')
+
+# TODO: regraft may also not be incompatible here (but could be confusing)
+if opt.delete and (opt.update or opt.rename or opt.regraft):
+    o.fatal('--delete is incompatible with update, rename and regraft modes.')
 
 # FIXME: remove this once we account for timestamp races, i.e. index;
 # touch new-file; index.  It's possible for this to happen quickly
@@ -245,15 +340,49 @@ if opt.clear:
     log('clear: clearing index.\n')
     clear_index(indexfile)
 
+graft_points = []
+if opt.graft:
+    for (option, parameter) in flags:
+        if option == "--graft":
+            splitted_parameter = parameter.split('=')
+            if len(splitted_parameter) != 2:
+                o.fatal("a graft point must be of the form old_path=new_path")
+            old_path, new_path = splitted_parameter
+            if not (old_path and new_path):
+                o.fatal("a graft point cannot be empty")
+            graft_points.append((realpath(old_path), new_path))
+
+graft_points.sort(reverse=True)
+
+# Rename and delete skip normal exclude and path processing.
+# Rename always should, delete perhaps shouldn't.
 excluded_paths = parse_excludes(flags, o.fatal)
 exclude_rxs = parse_rx_excludes(flags, o.fatal)
+excluded_logical_paths = parse_logical_excludes(flags, o.fatal)
+
 paths = index.reduce_paths(extra)
+
+if (opt.rename or opt.delete) and (excluded_paths or exclude_rxs):
+    o.fatal('--rename and --delete do not process exclude options.')
+
+if opt.rename:
+    # Sanity check command line
+    for pathpair in extra:
+        if pathpair.count != 1:
+            o.fatal('rename paths must be specified as *oldpath*=*newpath*.') 
+    rename_files_in_index(opt.extra, graft_points)
+elif opt.delete:
+    delete_files_in_index(opt.extra, graft_points)
+else:
+    paths = index.reduce_paths(extra)
 
 if opt.update:
     if not extra:
         o.fatal('update mode (-u) requested but no paths given')
     for (rp,path) in paths:
-        update_index(rp, excluded_paths, exclude_rxs)
+        update_index(rp, excluded_paths, exclude_rxs, 
+                     excluded_logical_paths,
+                     graft_points)
 
 if opt['print'] or opt.status or opt.modified:
     for (name, ent) in index.Reader(indexfile).filter(extra or ['']):

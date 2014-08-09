@@ -96,6 +96,7 @@ runtests: runtests-python runtests-cmdline
 runtests-python: all t/tmp
 	TMPDIR="$(test_tmp)" $(PYTHON) wvtest.py t/t*.py lib/*/t/t*.py
 
+<<<<<<< HEAD
 cmdline_tests := \
   t/test-fuse.sh \
   t/test-drecurse.sh \
@@ -126,6 +127,33 @@ tmp-target-run-test%: all t/tmp
 	TMPDIR="$(test_tmp)" t/test$*
 
 runtests-cmdline: $(subst t/test,tmp-target-run-test,$(cmdline_tests))
+=======
+runtests-cmdline: all
+	test -e t/tmp || mkdir t/tmp
+	TMPDIR="$(test_tmp)" t/test-fuse.sh
+	TMPDIR="$(test_tmp)" t/test-drecurse.sh
+	TMPDIR="$(test_tmp)" t/test-cat-file.sh
+	TMPDIR="$(test_tmp)" t/test-compression.sh
+	TMPDIR="$(test_tmp)" t/test-fsck.sh
+	TMPDIR="$(test_tmp)" t/test-index-clear.sh
+	TMPDIR="$(test_tmp)" t/test-index-check-device.sh
+	TMPDIR="$(test_tmp)" t/test-index-grafts.sh
+	TMPDIR="$(test_tmp)" t/test-ls.sh
+	TMPDIR="$(test_tmp)" t/test-meta.sh
+	TMPDIR="$(test_tmp)" t/test-on.sh
+	TMPDIR="$(test_tmp)" t/test-restore-map-owner.sh
+	TMPDIR="$(test_tmp)" t/test-restore-single-file.sh
+	TMPDIR="$(test_tmp)" t/test-rm-between-index-and-save.sh
+	TMPDIR="$(test_tmp)" t/test-sparse-files.sh
+	TMPDIR="$(test_tmp)" t/test-command-without-init-fails.sh
+	TMPDIR="$(test_tmp)" t/test-redundant-saves.sh
+	TMPDIR="$(test_tmp)" t/test-save-creates-no-unrefs.sh
+	TMPDIR="$(test_tmp)" t/test-save-restore-excludes.sh
+	TMPDIR="$(test_tmp)" t/test-save-strip-graft.sh
+	TMPDIR="$(test_tmp)" t/test-import-rdiff-backup.sh
+	TMPDIR="$(test_tmp)" t/test-xdev.sh
+	TMPDIR="$(test_tmp)" t/test.sh
+>>>>>>> Add --graft and --regraft support to bup-index and bup-save
 
 stupid:
 	PATH=/bin:/usr/bin $(MAKE) test

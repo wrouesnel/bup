@@ -31,13 +31,15 @@ def index_writer():
         os.chdir(tmpdir)
         ds = xstat.stat('.')
         fs = xstat.stat(lib_t_dir + '/tindex.py')
-        ms = index.MetaStoreWriter('index.meta.tmp');
+        ms = index.MetaStoreWriter('index.meta.tmp')
+        gw = index.GraftsWriter('index.grafts.tmp')
         tmax = (time.time() - 1) * 10**9
         w = index.Writer('index.tmp', ms, tmax)
-        w.add('/var/tmp/sporky', fs, 0)
-        w.add('/etc/passwd', fs, 0)
-        w.add('/etc/', ds, 0)
-        w.add('/', ds, 0)
+        w.add('/var/tmp/sporky', fs, 0, 0)
+        w.add('/etc/passwd', fs, 0, 0)
+        w.add('/etc/', ds, 0, 0)
+        w.add('/', ds, 0, 0)
+        gw.close()
         ms.close()
         w.close()
     finally:
@@ -103,6 +105,7 @@ def index_dirty():
         ms1 = index.MetaStoreWriter('index.meta.tmp')
         ms2 = index.MetaStoreWriter('index2.meta.tmp')
         ms3 = index.MetaStoreWriter('index3.meta.tmp')
+        gw = index.GraftsWriter('index.grafts.tmp')
         meta_ofs1 = ms1.store(default_meta)
         meta_ofs2 = ms2.store(default_meta)
         meta_ofs3 = ms3.store(default_meta)
@@ -112,20 +115,20 @@ def index_dirty():
         tmax = (time.time() - 1) * 10**9
 
         w1 = index.Writer('index.tmp', ms1, tmax)
-        w1.add('/a/b/x', fs, meta_ofs1)
-        w1.add('/a/b/c', fs, meta_ofs1)
-        w1.add('/a/b/', ds, meta_ofs1)
-        w1.add('/a/', ds, meta_ofs1)
+        w1.add('/a/b/x', fs, meta_ofs1, 0)
+        w1.add('/a/b/c', fs, meta_ofs1, 0)
+        w1.add('/a/b/', ds, meta_ofs1, 0)
+        w1.add('/a/', ds, meta_ofs1, 0)
         #w1.close()
         WVPASS()
 
         w2 = index.Writer('index2.tmp', ms2, tmax)
-        w2.add('/a/b/n/2', fs, meta_ofs2)
+        w2.add('/a/b/n/2', fs, meta_ofs2, 0)
         #w2.close()
         WVPASS()
 
         w3 = index.Writer('index3.tmp', ms3, tmax)
-        w3.add('/a/c/n/3', fs, meta_ofs3)
+        w3.add('/a/c/n/3', fs, meta_ofs3, 0)
         #w3.close()
         WVPASS()
 

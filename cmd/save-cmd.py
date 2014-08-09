@@ -214,6 +214,7 @@ except IOError, ex:
     log('error: cannot access %r; have you run bup index?' % indexfile)
     sys.exit(1)
 hlink_db = hlinkdb.HLinkDB(indexfile + '.hlink')
+gr = index.GraftsReader(indexfile + '.grafts')
 
 def already_saved(ent):
     return ent.is_valid() and w.exists(ent.sha) and ent.sha
@@ -256,6 +257,12 @@ if opt.progress:
 # FIXME: Detect/handle strip/graft name collisions (other than root),
 # i.e. if '/foo/bar' and '/bar' both map to '/'.
 
+# Get the real path of an entity we're saving
+def getrealpath(gr, ent):
+    graftind, prefix = gr.graft_at(ent.graft_ofs)
+    realpath = index.ungraftpath(graftind, prefix, ent.name)
+    return realpath
+
 first_root = None
 root_collision = None
 tstart = time.time()
@@ -263,11 +270,16 @@ count = subcount = fcount = 0
 lastskip_name = None
 lastdir = ''
 for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
+    # the bup path components (may or may not correspond to realpath)
     (dir, file) = os.path.split(ent.name)
+    
     exists = (ent.flags & index.IX_EXISTS)
     hashvalid = already_saved(ent)
     wasmissing = ent.sha_missing()
     oldsize = ent.size
+    
+    realpath = getrealpath(gr, ent)
+    
     if opt.verbose:
         if not exists:
             status = 'D'
@@ -278,6 +290,7 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
                 status = 'M'
         else:
             status = ' '
+        # TODO: show graft mappings
         if opt.verbose >= 2:
             log('%s %-70s\n' % (status, ent.name))
         elif not stat.S_ISDIR(ent.mode) and lastdir != dir:
@@ -298,6 +311,8 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
             lastskip_name = ent.name
         continue
 
+    # TODO: should these options be kept? their meaning gets weird
+    # I favor removing them and doing everything at index time - its cleaner.
     assert(dir.startswith('/'))
     if opt.strip:
         dirp = stripped_path_components(dir, extra)
@@ -322,6 +337,25 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
     # example) will have a real_fs_path of None, i.e. [('', None),
     # ...].
 
+    # To support grafts on the index level, fs_path needs in the list of
+    # tuples need to be exchanged for a real path against the entity, but
+    # only where no other grafting has been done.
+    # FIXME: integrate this with the dirp calculators above somehow?
+    
+    # go up one level immediately to get the directory entry
+    if file:
+        entcur = ent.parent
+    else:
+        entcur = ent
+    
+    for i,e in reversed(list(enumerate(dirp))):
+        # If no more real paths then stop trying to match them
+        if e[1] is None:
+            break
+        dirp[i] = (e[0], getrealpath(gr, entcur))
+        entcur = entcur.parent
+
+    # At this point we should have a nice array of real paths
     if first_root == None:
         first_root = dirp[0]
     elif first_root != dirp[0]:
@@ -371,14 +405,16 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
         meta.hardlink_target = find_hardlink_target(hlink_db, ent)
         # Restore the times that were cleared to 0 in the metastore.
         (meta.atime, meta.mtime, meta.ctime) = (ent.atime, ent.mtime, ent.ctime)
+        # Clear the path attribute we set in the cache
+        meta.path = None
         metalists[-1].append((sort_key, meta))
     else:
         if stat.S_ISREG(ent.mode):
             try:
-                f = hashsplit.open_noatime(ent.name)
+                f = hashsplit.open_noatime(realpath)
             except (IOError, OSError), e:
                 add_error(e)
-                lastskip_name = ent.name
+                lastskip_name = realpath
             else:
                 try:
                     (mode, id) = hashsplit.split_to_blob_or_tree(
@@ -386,16 +422,16 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
                                             keep_boundaries=False)
                 except (IOError, OSError), e:
                     add_error('%s: %s' % (ent.name, e))
-                    lastskip_name = ent.name
+                    lastskip_name = realpath
         else:
             if stat.S_ISDIR(ent.mode):
                 assert(0)  # handled above
             elif stat.S_ISLNK(ent.mode):
                 try:
-                    rl = os.readlink(ent.name)
+                    rl = os.readlink(realpath)
                 except (OSError, IOError), e:
                     add_error(e)
-                    lastskip_name = ent.name
+                    lastskip_name = realpath
                 else:
                     (mode, id) = (GIT_MODE_SYMLINK, w.new_blob(rl))
             else:
@@ -413,10 +449,10 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
             sort_key = git.shalist_item_sort_key((ent.mode, file, id))
             hlink = find_hardlink_target(hlink_db, ent)
             try:
-                meta = metadata.from_path(ent.name, hardlink_target=hlink)
+                meta = metadata.from_path(realpath, hardlink_target=hlink)
             except (OSError, IOError), e:
                 add_error(e)
-                lastskip_name = ent.name
+                lastskip_name = realpath
             else:
                 metalists[-1].append((sort_key, meta))
 

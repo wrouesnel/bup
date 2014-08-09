@@ -1,11 +1,19 @@
-import metadata, os, stat, struct, tempfile
+import metadata, os, stat, struct, tempfile, cPickle
 from bup import xstat
+from bup import vint
 from bup.helpers import *
+from bup.hashsplit import GIT_MODE_FILE
 
 EMPTY_SHA = '\0'*20
 FAKE_SHA = '\x01'*20
 
-INDEX_HDR = 'BUPI\0\0\0\5'
+INDEX_HDR = 'BUPI\0\0\0\6'
+
+# Index Version 0006: Added graft_ofs parameter, grafts.
+
+GRAFTS_HDR = 'BUPG\0\0\0\1'
+
+# Grafts Version 0001: First version.
 
 # Time values are handled as integer nanoseconds since the epoch in
 # memory, but are written as xstat/metadata timespecs.  This behavior
@@ -14,7 +22,7 @@ INDEX_HDR = 'BUPI\0\0\0\5'
 # Record times (mtime, ctime, atime) as xstat/metadata timespecs, and
 # store all of the times in the index so they won't interfere with the
 # forthcoming metadata cache.
-INDEX_SIG =  '!QQQqQqQqQIIQII20sHIIQ'
+INDEX_SIG =  '!QQQqQqQqQIIQII20sHIIIQ'
 
 ENTLEN = struct.calcsize(INDEX_SIG)
 FOOTER_SIG = '!Q'
@@ -26,7 +34,6 @@ IX_SHAMISSING = 0x2000    # the stored sha1 object doesn't seem to exist
 
 class Error(Exception):
     pass
-
 
 class MetaStoreReader:
     def __init__(self, filename):
@@ -95,6 +102,170 @@ class MetaStoreWriter:
         self._offsets[meta_encoded] = ofs
         return ofs
 
+class GraftsReader:
+    def __init__(self, filename):
+        self._filename = realpath(filename)
+        f = open(self._filename, 'rb')
+        
+        header = f.read(len(GRAFTS_HDR))
+        if header != GRAFTS_HDR:
+            log('warning: %s: grafts header: expected %r, got %r\n'
+                             % (filename, GRAFTS_HDR, header))
+            raise Exception('incompatible grafts file')
+        
+        graftind = vint.read_vuint(f) 
+        prefix = vint.read_bvec(f)
+        if (graftind != 0) or (prefix != ''):
+            log('first entry in grafts file does not match default. got %i, %s' %
+                (graftind, prefix))
+            raise Exception('incorrect first entry in grafts file')
+        
+        self._file = f
+        
+        self._grafts = {}   
+
+    def close(self):
+        if self._file:
+            self._file.close()
+            self._file = None
+
+    def __del__(self):
+        self.close()
+
+    def graft_at(self, rel_ofs):
+        res = self._grafts.get(rel_ofs)
+        if res is None:
+            ofs = rel_ofs + len(GRAFTS_HDR)
+            self._file.seek(ofs)
+            graftind = vint.read_vuint(self._file)
+            prefix = vint.read_bvec(self._file)
+            res = (graftind, prefix)
+        self._grafts[rel_ofs] = res
+        return res
+
+class GraftsWriter:
+    """output writer for bupindex grafts. Outputs necessary information to
+    reverse the graft per-file and recover the original path.
+    
+    Grafts are output as a relative file-offset from the graft header.
+    The default (noop) graft is always stored at offset 0.
+    """
+    def __init__(self, filename):
+        self._offsets = {}  # this dictionary deduplicates graft points
+        self._filename = realpath(filename)
+        
+        # If the file doesn't exist, setup a valid one.
+        if not os.path.exists(filename):
+            f = open(self._filename, 'w')
+            f.write(GRAFTS_HDR)
+            # Write the default entry
+            vint.write_vuint(f, 0)  # cut point zero
+            vint.write_bvec(f, '')  # zero length real prefix
+            f.close()
+        
+        f = open(self._filename, 'ab+')
+        f.seek(0)
+        # Validate the file header (incorrect graft data could do weird things)
+        header = f.read(len(GRAFTS_HDR))
+        if header != GRAFTS_HDR:
+            log('error: %s: grafts header: expected %r, got %r\n'
+                             % (filename, GRAFTS_HDR, header))
+            raise Exception('incompatible grafts file')
+        
+        # Validate the first entry in the file
+        graftind = vint.read_vuint(f) 
+        prefix = vint.read_bvec(f)
+        if (graftind != 0) or (prefix != ''):
+            log('first entry in grafts file does not match default. got %i, %s' %
+                (graftind, prefix))
+            raise Exception('incorrect first entry in grafts file')
+        self._offsets[(graftind, prefix)] = 0
+        
+        # Read the rest of the entries
+        try:
+            while True:
+                rel_ofs = f.tell() - len(GRAFTS_HDR)
+                graftind = vint.read_vuint(f) 
+                prefix = vint.read_bvec(f)
+                self._offsets[(graftind, prefix)] = rel_ofs
+        except EOFError:
+            pass
+        except:
+            log('grafts data appears to be corrupt\n')
+            raise
+        finally:
+            f.close()
+            # Open the file again.
+            self._file = open(self._filename, 'ab')
+
+    def close(self):
+        if self._file:
+            self._file.close()
+            self._file = None
+            #os.rename(self.tmpname, self._filename)
+
+    def __del__(self):
+        # Be optimistic.
+        self.close()
+
+    def store(self, graftind, prefix):
+        rel_ofs = self._offsets.get((graftind, prefix))
+        if rel_ofs is not None:
+            return rel_ofs
+        # not stored previously: store a new path. 
+        ofs = self._file.tell()
+        vint.write_vuint(self._file, graftind) # path depth this is root of
+        vint.write_bvec(self._file, prefix)   # real file path
+        
+        # we offset the real ofs by the length of the header. In this way
+        # graft_ofs == 0 always matches the default (no graft)
+        rel_ofs = ofs - len(GRAFTS_HDR)
+        self._offsets[(graftind, prefix)] = rel_ofs
+        return rel_ofs
+
+def graftpath(graft_points, path):
+    """try and convert real paths to bup logical paths based on graft points.
+    expects both sides to be absolute paths.
+    
+    returns a tuple containing the logical path, the removed section of
+    real path, and the graft index (string index from the start where the
+    graft ends and the real path should be pasted to recover it)
+    """
+    for (oldpath, newpath) in graft_points:
+        assert(os.path.isabs(oldpath))
+        assert(os.path.isabs(newpath))
+        
+        if path.startswith(oldpath):
+            pathsuffix = path[len(oldpath):]
+            # eat preceding separator
+            if pathsuffix[:1] == os.path.sep:
+                pathsuffix = pathsuffix[1:]
+            result = os.path.join(newpath, pathsuffix)
+            return (result, oldpath, len(newpath))
+    return (path, '', 0)
+
+def ungraftpath(graftind, prefix, buppath):
+    """ungraft a path based on it's grafts file entry.
+    """
+    # cut path at the graftind
+    cutpath = buppath[graftind:]
+    
+    # paste on prefix
+    path = os.path.join(prefix, cutpath)
+    return path
+
+def regraftpath(graft_points, buppath):
+    """convert a grafted path to point to a different underlying path.
+    Return None if no regraft necessary.
+    """
+    # Try and match a new old path to point to
+    for (oldpath, newpath) in graft_points:
+        if buppath.startswith(newpath):
+            suffix = buppath[len(newpath):]
+            newrealpath = os.path.join(oldpath, suffix)
+            return (newrealpath, oldpath)
+    return None
+            
 
 class Level:
     def __init__(self, ename, parent):
@@ -144,20 +315,21 @@ def _golevel(level, f, ename, newentry, metastore, tmax):
 
 
 class Entry:
-    def __init__(self, basename, name, meta_ofs, tmax):
+    def __init__(self, basename, name, meta_ofs, graft_ofs, tmax):
         self.basename = str(basename)
         self.name = str(name)
         self.meta_ofs = meta_ofs
+        self.graft_ofs = graft_ofs  # offset into graft store for real path
         self.tmax = tmax
         self.children_ofs = 0
         self.children_n = 0
 
     def __repr__(self):
-        return ("(%s,0x%04x,%d,%d,%d,%d,%d,%d,%d,%d,%s/%s,0x%04x,%d,0x%08x/%d)"
+        return ("(%s,0x%04x,%d,%d,%d,%d,%d,%d,%d,%d,%s/%s,0x%04x,%d,%d,0x%08x/%d)"
                 % (self.name, self.dev, self.ino, self.nlink,
                    self.ctime, self.mtime, self.atime, self.uid, self.gid,
                    self.size, self.mode, self.gitmode,
-                   self.flags, self.meta_ofs,
+                   self.flags, self.meta_ofs, self.graft_ofs,
                    self.children_ofs, self.children_n))
 
     def packed(self):
@@ -173,12 +345,12 @@ class Entry:
                                self.uid, self.gid, self.size, self.mode,
                                self.gitmode, self.sha, self.flags,
                                self.children_ofs, self.children_n,
-                               self.meta_ofs)
+                               self.meta_ofs, self.graft_ofs)
         except (DeprecationWarning, struct.error), e:
             log('pack error: %s (%r)\n' % (e, self))
             raise
 
-    def from_stat(self, st, meta_ofs, tstart, check_device=True):
+    def from_stat(self, st, meta_ofs, graft_ofs, tstart, check_device=True):
         old = (self.dev if check_device else 0,
                self.ino, self.nlink, self.ctime, self.mtime,
                self.uid, self.gid, self.size, self.flags & IX_EXISTS)
@@ -197,6 +369,7 @@ class Entry:
         self.mode = st.st_mode
         self.flags |= IX_EXISTS
         self.meta_ofs = meta_ofs
+        self.graft_ofs = graft_ofs
         # Check that the ctime's "second" is at or after tstart's.
         ctime_sec_in_ns = xstat.fstime_floor_secs(st.st_ctime) * 10**9
         if ctime_sec_in_ns >= tstart or old != new \
@@ -235,6 +408,11 @@ class Entry:
         self.sha = sha
         self.flags |= IX_HASHVALID|IX_EXISTS
 
+    def fake_validate(self):
+        self.gitmode = GIT_MODE_FILE
+        self.sha = FAKE_SHA
+        self.flags |= IX_HASHVALID
+
     def exists(self):
         return not self.is_deleted()
 
@@ -266,9 +444,9 @@ class Entry:
 class NewEntry(Entry):
     def __init__(self, basename, name, tmax, dev, ino, nlink,
                  ctime, mtime, atime,
-                 uid, gid, size, mode, gitmode, sha, flags, meta_ofs,
+                 uid, gid, size, mode, gitmode, sha, flags, meta_ofs, grafts_ofs,
                  children_ofs, children_n):
-        Entry.__init__(self, basename, name, meta_ofs, tmax)
+        Entry.__init__(self, basename, name, meta_ofs, grafts_ofs, tmax)
         (self.dev, self.ino, self.nlink, self.ctime, self.mtime, self.atime,
          self.uid, self.gid, self.size, self.mode, self.gitmode, self.sha,
          self.flags, self.children_ofs, self.children_n
@@ -281,19 +459,20 @@ class BlankNewEntry(NewEntry):
     def __init__(self, basename, meta_ofs, tmax):
         NewEntry.__init__(self, basename, basename, tmax,
                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, EMPTY_SHA, 0, meta_ofs, 0, 0)
+                          0, EMPTY_SHA, 0, meta_ofs, 0, 0, 0)
 
 
 class ExistingEntry(Entry):
     def __init__(self, parent, basename, name, m, ofs):
-        Entry.__init__(self, basename, name, None, None)
+        Entry.__init__(self, basename, name, None, None, None)
         self.parent = parent
         self._m = m
         self._ofs = ofs
         (self.dev, self.ino, self.nlink,
          self.ctime, ctime_ns, self.mtime, mtime_ns, self.atime, atime_ns,
          self.uid, self.gid, self.size, self.mode, self.gitmode, self.sha,
-         self.flags, self.children_ofs, self.children_n, self.meta_ofs
+         self.flags, self.children_ofs, self.children_n, self.meta_ofs,
+         self.graft_ofs
          ) = struct.unpack(INDEX_SIG, str(buffer(m, ofs, ENTLEN)))
         self.atime = xstat.timespec_to_nsecs((self.atime, atime_ns))
         self.mtime = xstat.timespec_to_nsecs((self.mtime, mtime_ns))
@@ -316,6 +495,21 @@ class ExistingEntry(Entry):
         if self.flags & IX_SHAMISSING:
             self.flags &= ~IX_SHAMISSING
             self.repack()
+
+    def to_stat(self):
+        # return a stat-like object to use as input to wi.add in other places
+        r = xstat.stat_result()
+        r.st_dev = self.dev
+        r.st_ino = self.ino
+        r.st_nlink = self.nlink
+        r.st_ctime = self.ctime
+        r.st_mtime = self.mtime
+        r.st_atime = self.atime
+        r.st_uid = self.uid
+        r.st_gid = self.gid
+        r.st_size = self.size
+        r.st_mode = self.mode
+        return r
 
     def repack(self):
         self._m[self._ofs:self._ofs+ENTLEN] = self.packed()
@@ -496,7 +690,7 @@ class Writer:
         self.level = _golevel(self.level, self.f, ename, entry,
                               self.metastore, self.tmax)
 
-    def add(self, name, st, meta_ofs, hashgen = None):
+    def add(self, name, st, meta_ofs, graft_ofs, hashgen = None):
         endswith = name.endswith('/')
         ename = pathsplit(name)
         basename = ename[-1]
@@ -516,11 +710,11 @@ class Writer:
                          st.st_ctime, st.st_mtime, st.st_atime,
                          st.st_uid, st.st_gid,
                          st.st_size, st.st_mode, gitmode, sha, flags,
-                         meta_ofs, 0, 0)
+                         meta_ofs, graft_ofs, 0, 0)
         else:
             assert(endswith)
             meta_ofs = self.metastore.store(metadata.Metadata())
-            e = BlankNewEntry(basename, meta_ofs, self.tmax)
+            e = BlankNewEntry(basename, meta_ofs, graft_ofs, self.tmax)
             e.gitmode = gitmode
             e.sha = sha
             e.flags = flags
