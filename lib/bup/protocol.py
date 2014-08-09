@@ -76,7 +76,7 @@ class PathStack:
     """Manages the stack of path elements associated with sent metadata.
     """
     def __init__(self, root=''):
-        self.root = slashremove(root)
+        self.root = eatslash(root)
         
         self.stack = [] # list of paths
         self.delta = 0  # number of level changes (positive = up) since check
