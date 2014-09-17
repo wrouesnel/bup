@@ -210,8 +210,7 @@ class ProtocolMetadata:
         o.name = node.name
         o.meta = node.metadata()
         if o.meta is None:  # assign minimal metadata
-            o.meta = metadata.Metadata()
-            #o.meta.mode = node.mode
+            o.meta = metadata.from_vfs(node)
         
         # get the path delta
         o.pathdelta = pathstack.check_delta()

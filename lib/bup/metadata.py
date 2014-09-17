@@ -185,7 +185,7 @@ _rec_tag_linux_attr = 6       # lsattr(1) chattr(1)
 _rec_tag_linux_xattr = 7      # getfattr(1) setfattr(1)
 _rec_tag_hardlink_target = 8 # hard link target path
 _rec_tag_common_v2 = 9 # times, user, group, type, perms, etc. (current)
-
+_rec_tag_vfs = 10      # vfs-specific (mode)
 
 class ApplyError(Exception):
     # Thrown when unable to apply any given bit of metadata to a path.
@@ -206,6 +206,24 @@ class Metadata:
     # NOTE: if any relevant fields are added or removed, be sure to
     # update same_file() below.
 
+    ## VFS file mode
+    # This tag is used when objects have empty metadata, but are being
+    # serialized over the wire.
+    
+    def _add_vfs(self,n):
+        self.vfsmode = n.mode
+    
+    def _encode_vfs(self):
+        if not self.vfsmode:
+            return None
+        
+        result = vint.pack('v', self.vfsmode)
+        return result
+
+    def _load_vfs_rec(self,port):
+        data = vint.read_bvec(port)
+        self.vfsmode = vint.unpack('v', data)[0]
+        
     ## Common records
 
     # Timestamps are (sec, ns), relative to 1970-01-01 00:00:00, ns
@@ -295,8 +313,8 @@ class Metadata:
             or stat.S_ISSOCK(self.mode) \
             or stat.S_ISLNK(self.mode)
 
-    def _create_via_common_rec(self, path, create_symlinks=True):
-        if not self.mode:
+    def _create_via_common_rec(self, path, mode, create_symlinks=True):
+        if not mode:
             raise ApplyError('no metadata - cannot create path ' + path)
 
         # If the path already exists and is a dir, try rmdir.
@@ -319,23 +337,23 @@ class Metadata:
             else:
                 os.unlink(path)
 
-        if stat.S_ISREG(self.mode):
+        if stat.S_ISREG(mode):
             assert(self._recognized_file_type())
             fd = os.open(path, os.O_CREAT|os.O_WRONLY|os.O_EXCL, 0600)
             os.close(fd)
-        elif stat.S_ISDIR(self.mode):
+        elif stat.S_ISDIR(mode):
             assert(self._recognized_file_type())
             os.mkdir(path, 0700)
-        elif stat.S_ISCHR(self.mode):
+        elif stat.S_ISCHR(mode):
             assert(self._recognized_file_type())
             os.mknod(path, 0600 | stat.S_IFCHR, self.rdev)
-        elif stat.S_ISBLK(self.mode):
+        elif stat.S_ISBLK(mode):
             assert(self._recognized_file_type())
             os.mknod(path, 0600 | stat.S_IFBLK, self.rdev)
-        elif stat.S_ISFIFO(self.mode):
+        elif stat.S_ISFIFO(mode):
             assert(self._recognized_file_type())
             os.mknod(path, 0600 | stat.S_IFIFO)
-        elif stat.S_ISSOCK(self.mode):
+        elif stat.S_ISSOCK(mode):
             try:
                 os.mknod(path, 0600 | stat.S_IFSOCK)
             except OSError, e:
@@ -344,13 +362,13 @@ class Metadata:
                     s.bind(path)
                 else:
                     raise
-        elif stat.S_ISLNK(self.mode):
+        elif stat.S_ISLNK(mode):
             assert(self._recognized_file_type())
             if self.symlink_target and create_symlinks:
                 # on MacOS, symlink() permissions depend on umask, and there's
                 # no way to chown a symlink after creating it, so we have to
                 # be careful here!
-                oldumask = os.umask((self.mode & 0777) ^ 0777)
+                oldumask = os.umask((mode & 0777) ^ 0777)
                 try:
                     os.symlink(self.symlink_target, path)
                 finally:
@@ -359,7 +377,7 @@ class Metadata:
         else:
             assert(not self._recognized_file_type())
             add_error('not creating "%s" with unrecognized mode "0x%x"\n'
-                      % (path, self.mode))
+                      % (path, mode))
 
     def _apply_common_rec(self, path, restore_numeric_ids=False):
         if not self.mode:
@@ -691,6 +709,7 @@ class Metadata:
         self.mode = self.uid = self.gid = self.user = self.group = None
         self.atime = self.mtime = self.ctime = None
         # optional members
+        self.vfsmode = None
         self.path = None
         self.size = None
         self.symlink_target = None
@@ -735,7 +754,8 @@ class Metadata:
                          self._encode_hardlink_target()),
                         (_rec_tag_posix1e_acl, self._encode_posix1e_acl()),
                         (_rec_tag_linux_attr, self._encode_linux_attr()),
-                        (_rec_tag_linux_xattr, self._encode_linux_xattr())])
+                        (_rec_tag_linux_xattr, self._encode_linux_xattr()),
+                        (_rec_tag_vfs, self._encode_vfs())])
         for tag, data in records:
             if data:
                 vint.write_vuint(port, tag)
@@ -774,6 +794,8 @@ class Metadata:
                     result._load_linux_attr_rec(port)
                 elif tag == _rec_tag_linux_xattr:
                     result._load_linux_xattr_rec(port)
+                elif tag == _rec_tag_vfs:
+                    result._load_vfs_rec(port)    
                 elif tag == _rec_tag_end:
                     return result
                 elif tag == _rec_tag_common: # Should be very rare.
@@ -785,10 +807,18 @@ class Metadata:
             raise Exception("EOF while reading Metadata")
 
     def isdir(self):
-        return stat.S_ISDIR(self.mode)
+        if self.mode:
+            return stat.S_ISDIR(self.mode)
+        else: 
+            return stat.S_ISDIR(self.vfsmode)
 
     def create_path(self, path, create_symlinks=True):
-        self._create_via_common_rec(path, create_symlinks=create_symlinks)
+        if self.mode:   # if common_rec, use that
+            self._create_via_common_rec(path, self.mode, create_symlinks=create_symlinks)
+        elif self.vfsmode:  # else try the git mode
+            self._create_via_vfs_rec(path, self.vfsmode, create_symlinks=create_symlinks)
+        else:   # else fail
+            raise ApplyError('no metadata - cannot create path ' + path)
 
     def apply_to_path(self, path=None, restore_numeric_ids=False):
         # apply metadata to path -- file must exist
@@ -837,6 +867,14 @@ def from_path(path, statinfo=None, archive_path=None,
     result._add_linux_xattr(path, st)
     return result
 
+def from_vfs(n, archive_path=None):
+    """the vfs version of from_path for creating metadata"""
+    result = n.metadata()
+    if not result:
+        result = Metadata()
+    result.path = archive_path
+    result._add_vfs(n)
+    return result
 
 def save_tree(output_file, paths,
               recurse=False,
