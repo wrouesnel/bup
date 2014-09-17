@@ -80,14 +80,14 @@ def index_negative_timestamps():
     tstart = time.time() * ns_per_sec
     tmax = tstart - ns_per_sec
     e = index.BlankNewEntry(foopath, 0, tmax)
-    e.from_stat(xstat.stat(foopath), 0, tstart)
+    e.from_stat(xstat.stat(foopath), 0, 0, tstart)
     assert len(e.packed())
     WVPASS()
 
     # Jun 10, 1893
     os.utime(foopath, (-0x80000000, -0x80000000))
     e = index.BlankNewEntry(foopath, 0, tmax)
-    e.from_stat(xstat.stat(foopath), 0, tstart)
+    e.from_stat(xstat.stat(foopath), 0, 0, tstart)
     assert len(e.packed())
     WVPASS()
     if wvfailure_count() == initial_failures:
@@ -188,3 +188,45 @@ def index_dirty():
         os.chdir(orig_cwd)
     if wvfailure_count() == initial_failures:
         subprocess.call(['rm', '-rf', tmpdir])
+
+@wvtest
+def graftwriter_check_repeatability():
+    """check that graftwriter correctly maintains entries across invocations"""
+    orig_cwd = os.getcwd()
+    tmpdir = tempfile.mkdtemp(dir=bup_tmp, prefix='bup-tindex-')
+    os.chdir(tmpdir)
+    gw = index.GraftsWriter('test.grafts')
+    a=[None]*2
+    b=[None]*2
+    c=[None]*2
+    a[0] = gw.store(1, "/testpath")
+    b[0] = gw.store(4, "/testpath/hello")
+    c[0] = gw.store(1, "/testpath/goodbye")
+    gw.close()
+    
+    # Reopen and check entries are stored
+    gw = index.GraftsWriter('test.grafts')
+    c[1] = gw.store(1, "/testpath/goodbye")
+    b[1] = gw.store(4, "/testpath/hello")
+    a[1] = gw.store(1, "/testpath")
+    gw.close()
+    
+    WVPASSEQ(a[0], a[1])
+    WVPASSEQ(b[0], b[1])
+    WVPASSEQ(c[0], c[1])
+    
+    # Check the grafts can be read by graft_reader
+    gr = index.GraftsReader('test.grafts')
+    ag = gr.graft_at(a[1])
+    bg = gr.graft_at(b[1])
+    cg = gr.graft_at(c[1])
+    WVPASS()
+    
+    # and that they come out the same
+    WVPASSEQ(ag, (1, "/testpath"))
+    WVPASSEQ(bg, (4, "/testpath/hello"))
+    WVPASSEQ(cg, (1, "/testpath/goodbye"))
+    
+    os.chdir(orig_cwd)
+    subprocess.call(['rm', '-rf', tmpdir])
+    

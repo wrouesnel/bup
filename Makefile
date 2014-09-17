@@ -96,38 +96,6 @@ runtests: runtests-python runtests-cmdline
 runtests-python: all t/tmp
 	TMPDIR="$(test_tmp)" $(PYTHON) wvtest.py t/t*.py lib/*/t/t*.py
 
-<<<<<<< HEAD
-cmdline_tests := \
-  t/test-fuse.sh \
-  t/test-drecurse.sh \
-  t/test-cat-file.sh \
-  t/test-compression.sh \
-  t/test-fsck.sh \
-  t/test-index-clear.sh \
-  t/test-index-check-device.sh \
-  t/test-ls.sh \
-  t/test-meta.sh \
-  t/test-on.sh \
-  t/test-restore-map-owner.sh \
-  t/test-restore-single-file.sh \
-  t/test-rm-between-index-and-save.sh \
-  t/test-sparse-files.sh \
-  t/test-command-without-init-fails.sh \
-  t/test-redundant-saves.sh \
-  t/test-save-creates-no-unrefs.sh \
-  t/test-save-restore-excludes.sh \
-  t/test-save-strip-graft.sh \
-  t/test-import-duplicity.sh \
-  t/test-import-rdiff-backup.sh \
-  t/test-xdev.sh \
-  t/test.sh
-
-# For parallel runs.
-tmp-target-run-test%: all t/tmp
-	TMPDIR="$(test_tmp)" t/test$*
-
-runtests-cmdline: $(subst t/test,tmp-target-run-test,$(cmdline_tests))
-=======
 runtests-cmdline: all
 	test -e t/tmp || mkdir t/tmp
 	TMPDIR="$(test_tmp)" t/test-fuse.sh
@@ -153,7 +121,6 @@ runtests-cmdline: all
 	TMPDIR="$(test_tmp)" t/test-import-rdiff-backup.sh
 	TMPDIR="$(test_tmp)" t/test-xdev.sh
 	TMPDIR="$(test_tmp)" t/test.sh
->>>>>>> Add --graft and --regraft support to bup-index and bup-save
 
 stupid:
 	PATH=/bin:/usr/bin $(MAKE) test
