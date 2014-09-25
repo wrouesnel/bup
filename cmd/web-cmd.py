@@ -162,7 +162,7 @@ class BupRequestHandler(tornado.web.RequestHandler):
     @tornado.web.asynchronous
     def _process_request(self, path):
         path = urllib.unquote(path)
-        print 'Handling request for %s' % path
+        debug1('Handling request for %s' % path)
         try:
             n = top.resolve(path)
         except vfs.NoSuchFile:
@@ -332,7 +332,7 @@ class BupRequestHandler(tornado.web.RequestHandler):
         error).  In either case, the headers are sent.
         """
         if not path.endswith('/') and len(path) > 0:
-            print 'Redirecting from %s to %s' % (path, path + '/')
+            debug1('Redirecting from %s to %s' % (path, path + '/'))
             return self.redirect(path + '/', permanent=True)
 
         try:
@@ -425,10 +425,11 @@ class BupRequestHandler(tornado.web.RequestHandler):
 
 
 optspec = """
-bup web [[hostname]:port]
+bup web [-s] [[hostname]:port|socketname]
 --
 human-readable    display human readable file sizes (i.e. 3.9K, 4.7M)
 browser           open the site in the default browser
+s,socket    connect bup-web to a unix socket. 
 """
 o = options.Options(optspec)
 (opt, flags, extra) = o.parse(sys.argv[1:])
@@ -436,11 +437,18 @@ o = options.Options(optspec)
 if len(extra) > 1:
     o.fatal("at most one argument expected")
 
-address = ('127.0.0.1', 8080)
-if len(extra) > 0:
-    addressl = extra[0].split(':', 1)
-    addressl[1] = int(addressl[1])
-    address = tuple(addressl)
+if opt.socket:
+    socket_path = None
+    if len(extra) > 0:
+        socket_path = extra[0]
+    else:
+        o.fatal("socket mode requires a path.")
+else:
+    address = ('127.0.0.1', 8080)
+    if len(extra) > 0:
+        addressl = extra[0].split(':', 1)
+        addressl[1] = int(addressl[1])
+        address = tuple(addressl)
 
 git.check_repo_or_die()
 top = vfs.RefList(None)
@@ -451,8 +459,8 @@ settings = dict(
     static_path = resource_path('web/static')
 )
 
-# Disable buffering on stdout, for debug messages
-sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
+# Disable buffering on stderr
+sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', 0) 
 
 # Initialize mimetypes app-wide
 if not mimetypes.inited:
@@ -469,8 +477,15 @@ application = tornado.web.Application([
     (r"(/.*)", BupRequestHandler),
 ], **settings)
 
-if __name__ == "__main__":
-    http_server = tornado.httpserver.HTTPServer(application)
+http_server = tornado.httpserver.HTTPServer(application)
+
+if opt.socket:  # listen on unix socket
+    if socket_path is not None:
+        sock = tornado.netutil.bind_unix_socket(socket_path)
+    else:
+        raise Exception("socket_path cannot be None.")
+    http_server.add_socket(sock)
+else:   # listen on ip address as normal
     http_server.listen(address[1], address=address[0])
 
     try:
@@ -478,7 +493,10 @@ if __name__ == "__main__":
     except AttributeError, e:
         sock = http_server._sockets.values()[0]
 
-    print "Serving HTTP on %s:%d..." % sock.getsockname()
+if opt.socket:
+    debug1("Serving HTTP on %s..." % sock.getsockname())
+else:
+    debug1("Serving HTTP on %s:%d..." % sock.getsockname())
 
     loop = tornado.ioloop.IOLoop.instance()
     if opt.browser:
