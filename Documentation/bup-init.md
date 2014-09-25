@@ -8,7 +8,7 @@ bup-init - initialize a bup repository
 
 # SYNOPSIS
 
-[BUP_DIR=*localpath*] bup init [-r *host*:*path*]
+[BUP_DIR=*localpath*] bup init [-r [*user*@]*host*:*path*]
 
 # DESCRIPTION
 
@@ -17,15 +17,13 @@ is `~/.bup`.
 
 # OPTIONS
 
--r, \--remote=*host*:*path*
+-r, \--remote=[*user*@]*host*:*path*
 :   Initialize not only the local repository, but also the
-    remote repository given by the *host* and *path*.  This is
-    not necessary if you intend to back up to the default
-    location on the server (ie. a blank *path*).  The connection to the
-    remote server is made with SSH.  If you'd like to specify which port, user
-    or private key to use for the SSH connection, we recommend you use the
-    `~/.ssh/config` file.
-
+    remote repository given by *user*, *host* and *path*. *path* may be
+    omitted if you intend to backup to the default path on the remote 
+    server. The connection to the remote server is made with SSH.
+    SSH settings can be handled with an appropriate Host entry in 
+    ~/.ssh/config.
 
 # EXAMPLES
     bup init

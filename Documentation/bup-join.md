@@ -8,7 +8,7 @@ bup-join - concatenate files from a bup repository
 
 # SYNOPSIS
 
-bup join [-r *host*:*path*] [refs or hashes...]
+bup join \[-r [*user*@]*host*:[*path*]\] \[refs or hashes...\]
 
 # DESCRIPTION
 
@@ -25,14 +25,14 @@ join` reads them from stdin instead.
 
 # OPTIONS
 
--r, \--remote=*host*:*path*
-:   Retrieves objects from the given remote repository instead of the
-    local one. *path* may be blank, in which case the default remote
-    repository is used.  The connection to the remote server is made
-    with SSH.  If you'd like to specify which port, user or private
-    key to use for the SSH connection, we recommend you use the
-    `~/.ssh/config` file.  Even though the data source is remote, a
-    local bup repository is still required.
+-r, \--remote=[*user*@]*host*:[*path*]
+:   Retrieves objects from the given remote repository
+    instead of the local one.  If *path* is omitted, uses the default 
+    path on the remote server (you still need to include the ':').
+    The connection to the remote server is made with SSH. SSH settings 
+    can be handled with an appropriate Host entry in ~/.ssh/config. 
+    Even though the data source is remote, a local bup repository is 
+    still required.
 
 # EXAMPLES
     # split and then rejoin a file using its tree id

@@ -8,8 +8,9 @@ bup-save - create a new bup backup set
 
 # SYNOPSIS
 
-bup save [-r *host*:*path*] \<-t|-c|-n *name*\> [-#] [-f *indexfile*]
-[-v] [-q] [\--smaller=*maxsize*] \<paths...\>;
+bup save \[-r [*user*@]*host*:*path*]\] 
+		\<-t|-c|-n *name*\> \[-#\] \[-f *indexfile*\]
+		\[-v\] \[-q\] [\--smaller=*maxsize*] \<paths...\>;
 
 # DESCRIPTION
 
@@ -34,14 +35,15 @@ handling of metadata.
 
 # OPTIONS
 
--r, \--remote=*host*:*path*
+-r, \--remote=[*user*@]*host*:[*path*]
 :   save the backup set to the given remote server.  If
     *path* is omitted, uses the default path on the remote
-    server (you still need to include the ':').  The connection to the
-    remote server is made with SSH.  If you'd like to specify which port, user
-    or private key to use for the SSH connection, we recommend you use the
-    `~/.ssh/config` file.
-
+    server (you still need to include the ':'). The connection 
+    to the remote server is made with SSH. SSH settings can be 
+    handled with an appropriate Host entry in ~/.ssh/config. 
+    Even though the destination is remote, a local bup repository 
+    is still required.
+    
 -t, \--tree
 :   after creating the backup set, print out the git tree
     id of the resulting backup.

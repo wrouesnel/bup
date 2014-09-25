@@ -15,7 +15,8 @@ bup split -b COMMON\_OPTIONS
 bup split \<--noop \[--copy\]|--copy\> COMMON\_OPTIONS
 
 COMMON\_OPTIONS
-  ~ \[-r *host*:*path*\] \[-v\] \[-q\] \[-d *seconds-since-epoch*\] \[\--bench\]
+  ~ \[-r [*user*@]*host*:*path*\]
+    \[-v\] \[-q\] \[-d *seconds-since-epoch*\] \[\--bench\]
     \[\--max-pack-size=*bytes*\] \[-#\] \[\--bwlimit=*bytes*\]
     \[\--max-pack-objects=*n*\] \[\--fanout=*count*\]
     \[\--keep-boundaries\] \[--git-ids | filenames...\]
@@ -87,14 +88,13 @@ being the most likely choice.
 
 # OPTIONS
 
--r, \--remote=*host*:*path*
+-r, \--remote=[*user*@]*host*:[*path*]
 :   save the backup set to the given remote server.  If *path* is
     omitted, uses the default path on the remote server (you still
     need to include the ':').  The connection to the remote server is
-    made with SSH.  If you'd like to specify which port, user or
-    private key to use for the SSH connection, we recommend you use
-    the `~/.ssh/config` file.  Even though the destination is remote,
-    a local bup repository is still required.
+    made with SSH. SSH settings can be handled with an appropriate 
+    Host entry in ~/.ssh/config. Even though the destination is remote,
+    a local bup repository is still required. 
 
 -d, \--date=*seconds-since-epoch*
 :   specify the date inscribed in the commit (seconds since 1970-01-01).
