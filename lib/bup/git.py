@@ -78,9 +78,11 @@ def parse_commit(content):
                       committer_offset=parse_tz_offset(matches['ctz']),
                       message=matches['message'])
 
-
-def get_commit_items(id, cp):
-    commit_it = cp.get(id)
+def get_commit_items(id, catfunc):
+    """gets a list of commit items
+    :catfunc    function which reads a hash, and returns the blobs it references
+    """
+    commit_it = catfunc(id)
     assert(commit_it.next() == 'commit')
     commit_content = ''.join(commit_it)
     return parse_commit(commit_content)
@@ -766,7 +768,6 @@ def _git_date(date):
 def _gitenv():
     os.environ['GIT_DIR'] = os.path.abspath(repo())
 
-
 def list_refs(refname = None):
     """Generate a list of tuples in the form (refname,hash).
     If a ref name is specified, list only this particular ref.
@@ -824,13 +825,13 @@ def rev_list(ref, count=None):
         raise GitError, 'git rev-list returned error %d' % rv
 
 
-def get_commit_dates(refs):
+def get_commit_dates(refs, catfunc):
     """Get the dates for the specified commit refs.  For now, every unique
        string in refs must resolve to a different commit or this
        function will fail."""
     result = []
     for ref in refs:
-        commit = get_commit_items(ref, cp())
+        commit = get_commit_items(ref, catfunc)
         result.append(commit.author_sec)
     return result
 

@@ -69,6 +69,20 @@ class Consts(ProtocolConstBase):
     
     PROTOCOL_VERSION = 1    # Protocol version in this file
 
+###############
+# Helpers
+###############
+def packhash(self, sha):
+    """pack a SHA1 hash to a network-byte order struct"""
+    return struct.pack('!%is' % Consts.HASHSIZE, sha)
+
+def unpackhash(self,din):
+    """unpack a SHA1 hash to a bytestring"""
+    return struct.unpack('!%is' % Consts.HASHSIZE, din)[0]
+
+def readpackedhash(self,port):
+    return struct.unpack('!%is' % Consts.HASHSIZE, port.read(Consts.HASHSIZE))[0]
+
 ##############
 # Data structures
 ##############
@@ -76,7 +90,7 @@ class PathStack:
     """Manages the stack of path elements associated with sent metadata.
     """
     def __init__(self, root=''):
-        self.root = eatslash(root)
+        self.root = slashremove(root)
         
         self.stack = [] # list of paths
         self.delta = 0  # number of level changes (positive = up) since check

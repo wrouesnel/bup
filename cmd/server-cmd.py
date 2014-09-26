@@ -380,6 +380,49 @@ def cat(conn, arg):
         conn.write('\0\0\0\0')
         conn.ok()
 
+def list_refs(conn, refname = None):
+    """server wrapper for bup.git.list_refs. writes output as
+    bvec and struct packed data, terminates with an empty bvec."""
+    _init_session()
+    for name, sha in git.list_refs(refname):
+        vint.write_bvec(conn, name)
+        conn.write(packhash(sha))
+    vint.write_bvec(conn, '')
+    conn.ok()
+
+def rev_list(conn, extra):
+    """server wrapper for bup.git.rev_list. writes output as 
+    vint,packedhash pairs"""
+    args = extra.split(' ')
+    count = None
+    ref = None
+    if len(args) == 2:
+        ref = args[0]
+        count = args[1]
+    elif len(args) == 1:
+        ref = args[0]
+    elif len(args) > 2:
+        raise Exception("rev-list takes at most 2 arguments. %i given." % len(args))
+    else:
+        raise Exception("rev-list requires at least 1 argument")
+    for date,commit in git.rev_list(ref, count):
+        # We reverse the tuple format, since a 0-length bvec then becomes
+        # the EOF signal.
+        vint.write_bvec(conn, commit)
+        vint.write_vuint(conn, date)
+    vint.write_bvec(conn, commit)
+    conn.ok()
+
+def rev_parse(conn, arg):
+    """server wrapper for bup.git.rev_parse. writes output as a bvec,
+    0 length for None."""
+    result = git.rev_parse(arg)
+    if result:
+        vint.write_bvec(conn, result)
+    else:
+        vint.write_bvec(conn, '')
+    conn.ok()
+
 optspec = """
 bup server
 """
@@ -401,8 +444,11 @@ commands = {
     'receive-objects-v2': receive_objects_v2,
     'restore-files': restore_files,
     'quiet-mode': quiet_mode,
+    # bup.git protocol wrappers
     'read-ref': read_ref,
     'update-ref': update_ref,
+    'list-refs' : list_refs,
+    'rev-list' : rev_parse,
     'cat': cat,
 }
 
