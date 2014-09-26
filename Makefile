@@ -12,6 +12,9 @@ else
   test_tmp := $(CURDIR)/t/tmp
 endif
 
+TEST_SH := $(wildcard t/t*.sh)
+TEST_PY := $(wildcard t/t*.py) $(wildcard lib/*/t/t*.py)
+
 default: all
 
 all: bup Documentation/all
@@ -82,33 +85,21 @@ lib/bup/_version.py:
 
 runtests: all runtests-python runtests-cmdline
 
-runtests-python: all
+.PHONY: ${TEST_PY}
+${TEST_PY}: all
 	test -e t/tmp || mkdir t/tmp
-	TMPDIR="$(test_tmp)" $(PYTHON) wvtest.py t/t*.py lib/*/t/t*.py
+	TMPDIR="$(test_tmp)" $(PYTHON) wvtest.py $@
 
-runtests-cmdline: all
+.PHONY: runtests-python
+runtests-python: ${TEST_PY}
+
+.PHONY: ${TEST_SH}
+${TEST_SH}: all
 	test -e t/tmp || mkdir t/tmp
-	TMPDIR="$(test_tmp)" t/test-fuse.sh
-	TMPDIR="$(test_tmp)" t/test-drecurse.sh
-	TMPDIR="$(test_tmp)" t/test-cat-file.sh
-	TMPDIR="$(test_tmp)" t/test-compression.sh
-	TMPDIR="$(test_tmp)" t/test-fsck.sh
-	TMPDIR="$(test_tmp)" t/test-index-clear.sh
-	TMPDIR="$(test_tmp)" t/test-index-check-device.sh
-	TMPDIR="$(test_tmp)" t/test-ls.sh
-	TMPDIR="$(test_tmp)" t/test-meta.sh
-	TMPDIR="$(test_tmp)" t/test-on.sh
-	TMPDIR="$(test_tmp)" t/test-restore-map-owner.sh
-	TMPDIR="$(test_tmp)" t/test-restore-single-file.sh
-	TMPDIR="$(test_tmp)" t/test-rm-between-index-and-save.sh
-	TMPDIR="$(test_tmp)" t/test-command-without-init-fails.sh
-	TMPDIR="$(test_tmp)" t/test-redundant-saves.sh
-	TMPDIR="$(test_tmp)" t/test-save-creates-no-unrefs.sh
-	TMPDIR="$(test_tmp)" t/test-save-restore-excludes.sh
-	TMPDIR="$(test_tmp)" t/test-save-strip-graft.sh
-	TMPDIR="$(test_tmp)" t/test-import-rdiff-backup.sh
-	TMPDIR="$(test_tmp)" t/test-xdev.sh
-	TMPDIR="$(test_tmp)" t/test.sh
+	TMPDIR="$(test_tmp)" $@
+
+.PHONY: runtests-cmdline
+runtests-cmdline: ${TEST_SH}
 
 stupid:
 	PATH=/bin:/usr/bin $(MAKE) test
