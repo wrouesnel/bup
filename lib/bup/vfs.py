@@ -219,7 +219,8 @@ class _FileReader(object):
 
 class Node(object):
     """Base class for file representation."""
-    def __init__(self, parent, name, mode, hash):
+    def __init__(self, client, parent, name, mode, hash):
+        self.client = client
         self.parent = parent
         self.name = name
         self.mode = mode
@@ -370,8 +371,8 @@ class Node(object):
 
 class File(Node):
     """A normal file from bup's repository."""
-    def __init__(self, parent, name, mode, hash, bupmode):
-        Node.__init__(self, parent, name, mode, hash)
+    def __init__(self, client, parent, name, mode, hash, bupmode):
+        Node.__init__(self, client, parent, name, mode, hash)
         self.bupmode = bupmode
         self._cached_size = None
         self._filereader = None
@@ -419,8 +420,8 @@ class File(Node):
 _symrefs = 0
 class Symlink(File):
     """A symbolic link from bup's repository."""
-    def __init__(self, parent, name, hash, bupmode):
-        File.__init__(self, parent, name, 0120000, hash, bupmode)
+    def __init__(self, client, parent, name, hash, bupmode):
+        File.__init__(self, client, parent, name, 0120000, hash, bupmode)
 
     def size(self):
         """Get the file size of the file at which this link points."""
@@ -458,8 +459,8 @@ class Symlink(File):
 
 class FakeSymlink(Symlink):
     """A symlink that is not stored in the bup repository."""
-    def __init__(self, parent, name, toname):
-        Symlink.__init__(self, parent, name, EMPTY_SHA, git.BUP_NORMAL)
+    def __init__(self, client, parent, name, toname):
+        Symlink.__init__(self, client, parent, name, EMPTY_SHA, git.BUP_NORMAL)
         self.toname = toname
 
     def readlink(self):
@@ -500,19 +501,21 @@ class Dir(Node):
         for (mode,mangled_name,sha) in git.tree_decode(''.join(it)):
             if mangled_name == '.bupm':
                 bupmode = stat.S_ISDIR(mode) and BUP_CHUNKED or BUP_NORMAL
-                self._bupm = File(self, mangled_name, GIT_MODE_FILE, sha,
-                                  bupmode)
+                self._bupm = File(self.client, self, mangled_name, 
+                                  GIT_MODE_FILE, sha, bupmode)
                 continue
             name = mangled_name
             (name,bupmode) = git.demangle_name(mangled_name)
             if bupmode == git.BUP_CHUNKED:
                 mode = GIT_MODE_FILE
             if stat.S_ISDIR(mode):
-                self._subs[name] = Dir(self, name, mode, sha)
+                self._subs[name] = Dir(self.client, self, name, mode, sha)
             elif stat.S_ISLNK(mode):
-                self._subs[name] = Symlink(self, name, sha, bupmode)
+                self._subs[name] = Symlink(self.client, self, name, sha, 
+                                           bupmode)
             else:
-                self._subs[name] = File(self, name, mode, sha, bupmode)
+                self._subs[name] = File(self.client, self, name, mode, sha, 
+                                        bupmode)
 
     def metadata(self):
         """Return this Dir's Metadata() object, if any."""
@@ -541,15 +544,15 @@ class CommitDir(Node):
     separation helps us avoid having too much directories on the same level as
     the number of commits grows big.
     """
-    def __init__(self, parent, name):
-        Node.__init__(self, parent, name, GIT_MODE_TREE, EMPTY_SHA)
+    def __init__(self, client, parent, name):
+        Node.__init__(self, client, parent, name, GIT_MODE_TREE, EMPTY_SHA)
 
     def _mksubs(self):
         self._subs = {}
         refs = git.list_refs()
         for ref in refs:
             #debug2('ref name: %s\n' % ref[0])
-            revs = git.rev_list(ref[1].encode('hex'))
+            revs = self.client.rev_list(ref[1].encode('hex'))
             for (date, commit) in revs:
                 #debug2('commit: %s  date: %s\n' % (commit.encode('hex'), date))
                 commithex = commit.encode('hex')
@@ -557,7 +560,7 @@ class CommitDir(Node):
                 dirname = commithex[2:]
                 n1 = self._subs.get(containername)
                 if not n1:
-                    n1 = CommitList(self, containername)
+                    n1 = CommitList(self.client, self, containername)
                     self._subs[containername] = n1
 
                 if n1.commits.get(dirname):
@@ -569,32 +572,33 @@ class CommitDir(Node):
 
 class CommitList(Node):
     """A list of commits with hashes that start with the current node's name."""
-    def __init__(self, parent, name):
-        Node.__init__(self, parent, name, GIT_MODE_TREE, EMPTY_SHA)
+    def __init__(self, client, parent, name):
+        Node.__init__(self, client, parent, name, GIT_MODE_TREE, EMPTY_SHA)
         self.commits = {}
 
     def _mksubs(self):
         self._subs = {}
         for (name, (hash, date)) in self.commits.items():
-            n1 = Dir(self, name, GIT_MODE_TREE, hash)
+            n1 = Dir(self.client, self, name, GIT_MODE_TREE, hash)
             n1.ctime = n1.mtime = date
             self._subs[name] = n1
 
 
 class TagDir(Node):
     """A directory that contains all tags in the repository."""
-    def __init__(self, parent, name):
-        Node.__init__(self, parent, name, GIT_MODE_TREE, EMPTY_SHA)
+    def __init__(self, client, parent, name):
+        Node.__init__(self, client, parent, name, GIT_MODE_TREE, EMPTY_SHA)
 
     def _mksubs(self):
         self._subs = {}
-        for (name, sha) in git.list_refs():
+        for (name, sha) in self.client.list_refs():
             if name.startswith('refs/tags/'):
                 name = name[10:]
-                date = git.get_commit_dates([sha.encode('hex')])[0]
+                date = git.get_commit_dates([sha.encode('hex')], 
+                                            self.client.cat)[0]
                 commithex = sha.encode('hex')
                 target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
-                tag1 = FakeSymlink(self, name, target)
+                tag1 = FakeSymlink(self.client, self, name, target)
                 tag1.ctime = tag1.mtime = date
                 self._subs[name] = tag1
 
@@ -605,34 +609,34 @@ class BranchList(Node):
     Represents each commit as a symlink that points to the commit directory in
     /.commit/??/ . The symlink is named after the commit date.
     """
-    def __init__(self, parent, name, hash):
-        Node.__init__(self, parent, name, GIT_MODE_TREE, hash)
+    def __init__(self, client, parent, name, hash):
+        Node.__init__(self, client, parent, name, GIT_MODE_TREE, hash)
 
     def _mksubs(self):
         self._subs = {}
 
-        tags = git.tags()
+        tags = self.client.tags()
 
-        revs = list(git.rev_list(self.hash.encode('hex')))
+        revs = list(self.client.rev_list(self.hash.encode('hex')))
         latest = revs[0]
         for (date, commit) in revs:
             l = time.localtime(date)
             ls = time.strftime('%Y-%m-%d-%H%M%S', l)
             commithex = commit.encode('hex')
             target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
-            n1 = FakeSymlink(self, ls, target)
+            n1 = FakeSymlink(self.client, self, ls, target)
             n1.ctime = n1.mtime = date
             self._subs[ls] = n1
 
             for tag in tags.get(commit, []):
-                t1 = FakeSymlink(self, tag, target)
+                t1 = FakeSymlink(self.client, self, tag, target)
                 t1.ctime = t1.mtime = date
                 self._subs[tag] = t1
 
         (date, commit) = latest
         commithex = commit.encode('hex')
         target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
-        n1 = FakeSymlink(self, 'latest', target)
+        n1 = FakeSymlink(self.client, self, 'latest', target)
         n1.ctime = n1.mtime = date
         self._subs['latest'] = n1
 
@@ -646,25 +650,26 @@ class RefList(Node):
     Also, a special sub-node named '.commit' contains all commit directories
     that are reachable via a ref (e.g. a branch).  See CommitDir for details.
     """
-    def __init__(self, parent):
-        Node.__init__(self, parent, '/', GIT_MODE_TREE, EMPTY_SHA)
+    def __init__(self, client, parent):
+        Node.__init__(self, client, parent, '/', GIT_MODE_TREE, EMPTY_SHA)
 
     def _mksubs(self):
         self._subs = {}
 
-        commit_dir = CommitDir(self, '.commit')
+        commit_dir = CommitDir(self.client, self, '.commit')
         self._subs['.commit'] = commit_dir
 
-        tag_dir = TagDir(self, '.tag')
+        tag_dir = TagDir(self.client, self, '.tag')
         self._subs['.tag'] = tag_dir
 
-        refs_info = [(name[11:], sha) for (name,sha) in git.list_refs() \
+        refs_info = [(name[11:], sha) for (name,sha) in self.client.list_refs() \
                      if name.startswith('refs/heads/')]
 
         dates = git.get_commit_dates([sha.encode('hex')
-                                      for (name, sha) in refs_info])
+                                      for (name, sha) in refs_info],
+                                     self.client.cat)
 
         for (name, sha), date in zip(refs_info, dates):
-            n1 = BranchList(self, name, sha)
+            n1 = BranchList(self.client, self, name, sha)
             n1.ctime = n1.mtime = date
             self._subs[name] = n1
