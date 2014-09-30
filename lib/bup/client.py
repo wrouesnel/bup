@@ -52,8 +52,133 @@ def parse_remote(remote):
         else:
             return 'ssh', rs[0], None, rs[1]
 
-
 class Client:
+    """default bup client implementation for access to a local repository"""
+    def __init__(self, bup_repo = None, create=False):
+        self._busy = None
+        
+        if create:
+            git.init_repo(bup_repo)
+        else:
+            git.check_repo_or_die(bup_repo)
+
+    def check_ok(self):
+        """verify a client action completed successfully. For local clients
+        this will always return true, since exceptions are allowed to
+        propagate.
+        """
+        return True
+
+    def check_busy(self):
+        if self._busy:
+            raise ClientError('already busy with command %r' % self._busy)
+        
+    def ensure_busy(self):
+        if not self._busy:
+            raise ClientError('expected to be busy, but not busy?!')
+        
+    def _not_busy(self):
+        self._busy = None
+
+    def new_packwriter(self, compression_level = 1):
+        self.check_busy()
+        return git.PackWriter(compression_level = compression_level)
+
+    def read_ref(self, refname):
+        self.check_busy()
+        r = git.read_ref(refname)
+        self.check_ok() # FIXME: is there any reason a local client needs this?
+        return r
+
+    def update_ref(self, refname, newval, oldval):
+        self.check_busy()
+        git.update_ref(refname, newval, oldval)
+        self.check_ok()
+
+    def get(self, id):
+        """read the item pointed to by id. yields a string indicating type
+        and then object data."""
+        self.check_busy()
+        self._busy = 'get'
+        for d in git.cp().get(id.encode('hex')):
+            yield d
+        e = self.check_ok()
+        self._not_busy()
+        if e:
+            raise KeyError(str(e))
+
+    def cat(self, id):
+        """cat dumps all reachable blobs. use get if you just want exactly
+        one blob."""
+        self.check_busy()
+        self._busy = 'cat'
+        for blob in git.cp().join(id.encode('hex')):
+            yield blob
+        e = self.check_ok()
+        self._not_busy()
+        if e:
+            raise KeyError(str(e))
+    
+    def list_refs(self, refname = None):
+        """git.list_refs over bup-server shell."""
+        self.check_busy()
+        self._busy = 'list-refs'
+        if refname:
+            self.conn.write('list-refs {0}\n'.format(refname))
+        else:
+            self.conn.write('list-refs\n')
+        while 1:
+            name = vint.read_bvec(self.conn)
+            if len(name) == 0:
+                break   # empty line indicates EOF
+            sha = readpackedhash(self.conn)
+            yield (name,sha)
+        self.check_ok()
+        self._not_busy()
+    
+    def rev_list(self, ref, count=None):
+        """git.rev_list over bup-server shell"""
+        self.check_busy()
+        self._busy = 'rev-list'
+        if count:
+            self.conn.write('rev-list {0} {1}\n'.format(ref, count))
+        else:
+            self.conn.write('rev-list {0}\n'.format(ref))
+        while 1:
+            commit = vint.read_bvec(self.conn)
+            if len(commit) == 0:
+                break   # empty vec == eof.
+            date = vint.read_vuint(self.conn)
+            yield (date,commit)
+        self.check_ok()
+        self._not_busy()
+        
+    def rev_parse(self, committish):
+        """git.rev_parse over bup-server shell"""
+        self.check_busy()
+        self._busy = 'rev-parse'
+        self.conn.write('rev-parse {0}'.format(committish))
+        hash = vint.read_bvec(self.conn)
+        result = None
+        if len(hash) != 0:
+            result = hash
+        self.check_ok()
+        self._not_busy()
+        return result
+    
+    def tags(self):
+        """git.tags implementation over bup-server shell."""
+        tags = {}
+        for (n,c) in self.list_refs():
+            if n.startswith('refs/tags/'):
+                name = n[10:]
+                if not c in tags:
+                    tags[c] = []
+                tags[c].append(name)  # more than one tag can point at 'c'
+        return tags
+
+class RemoteClient(Client):
+    """client for remote access to a bup repository via bup-server"""
     def __init__(self, remote, create=False):
         self._busy = self.conn = None
         self.sock = self.p = self.pout = self.pin = None
@@ -297,7 +422,6 @@ class Client:
         self.check_ok()
         self._not_busy()
     
-    # TODO
     def rev_list(self, ref, count=None):
         """git.rev_list over bup-server shell"""
         self.check_busy()
@@ -315,7 +439,6 @@ class Client:
         self.check_ok()
         self._not_busy()
         
-    # TODO
     def rev_parse(self, committish):
         """git.rev_parse over bup-server shell"""
         self.check_busy()

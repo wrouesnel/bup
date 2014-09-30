@@ -2,6 +2,7 @@
 import os, sys, struct, shlex
 import tarfile
 import stat
+import cStringIO
 from collections import deque
 from bup import options, git, metadata, vfs, xstat, vint
 from bup.protocol import *
@@ -360,6 +361,27 @@ def update_ref(conn, arg):
 
 
 cat_pipe = None
+def get(conn, arg):
+    if len(arg) > 1:
+        raise Exception("get takes only 1 argument. %i given.\n" % len(arg))
+    id = arg[0]
+    global cat_pipe
+    _init_session()
+    if not cat_pipe:
+        cat_pipe = git.CatPipe()
+    # get objects are very small, so we can reliably send the entire thing
+    # as a single bvec.
+    it = cat_pipe.get(id)
+    type = it.next()
+    dio = cStringIO.StringIO()
+    for blob in it:
+        dio.write(blob)
+    vint.write_bvec(conn, type)
+    vint.write_bvec(conn, dio.getvalue())
+    dio.close()
+    conn.ok()
+    
+    
 def cat(conn, arg):
     if len(arg) > 1:
         raise Exception("cat takes only 1 argument. %i given.\n" % len(arg))
