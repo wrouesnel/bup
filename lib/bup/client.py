@@ -95,6 +95,20 @@ class Client:
         git.update_ref(refname, newval, oldval)
         self.check_ok()
 
+    # TODO: implement a caching mechanism for file sizes at the repository
+    # level. SQLite db maybe?
+    def size(self, hash):
+        """get the size in bytes of the object pointed to by hash in the
+        git repository."""
+        self.check_busy()
+        it = self.cat(hash)
+        objtype = it.next()
+        assert(objtype == 'tree' or objtype == 'blob')
+        if objtype == 'tree':
+            pass
+        elif objtype == 'blob':
+            pass
+
     def get(self, id):
         """read the item pointed to by id. yields a string indicating type
         and then object data."""
