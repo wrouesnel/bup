@@ -57,6 +57,8 @@ class Client:
     def __init__(self, bup_repo = None, create=False):
         self._busy = None
         
+        self.bup_repo = bup_repo    # Keep track of bup repo path.
+        
         if create:
             git.init_repo(bup_repo)
         else:
