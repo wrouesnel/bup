@@ -10,6 +10,8 @@ from bup.helpers import *
 
 suspended_w = None
 dumb_server_mode = False
+# TODO: derive a server object which can express protocol versions
+cli = None  # The server simply wraps a client.
 
 def do_help(conn, junk):
     conn.write('Commands:\n    %s\n' % '\n    '.join(sorted(commands)))
@@ -22,25 +24,23 @@ def _set_mode():
            % (dumb_server_mode and 'dumb' or 'smart'))
 
 def _init_session(reinit_with_new_repopath=None):
-    if reinit_with_new_repopath is None and git.repodir:
+    global cli
+    if reinit_with_new_repopath is None and cli is not None:
         return
-    git.check_repo_or_die(reinit_with_new_repopath)
-    # OK. we now know the path is a proper repository. Record this path in the
-    # environment so that subprocesses inherit it and know where to operate.
-    os.environ['BUP_DIR'] = git.repodir
-    debug1('bup server: bupdir is %r\n' % git.repodir)
+    cli = client.Client(reinit_with_new_repopath)
+    debug1('bup server: bupdir is %r\n' % cli.bup_repo)
     _set_mode()
 
-
 def init_dir(conn, arg):
+    global cli
     if len(arg) > 1:
         raise Exception("init-dir takes only 1 argument. %i given.\n" % len(arg))
     path = arg[0]
-    git.init_repo(path)
-    debug1('bup server: bupdir initialized: %r\n' % git.repodir)
+    # This is a bit of legacy. But _init_session will fallthrough correctly.
+    cli = client.Client(path, create=True)
+    debug1('bup server: bupdir initialized: %r\n' % cli.bup_repo)
     _init_session(path)
     conn.ok()
-
 
 def set_dir(conn, arg):
     if len(arg) > 1:
@@ -48,31 +48,23 @@ def set_dir(conn, arg):
     path = arg[0]
     _init_session(path)
     conn.ok()
-
     
 def list_indexes(conn, junk):
     _init_session()
     suffix = ''
-    if dumb_server_mode:
-        suffix = ' load'
-    for f in os.listdir(git.repo('objects/pack')):
-        if f.endswith('.idx'):
-            conn.write('%s%s\n' % (f, suffix))
+    conn.write( '\n'.join(cli.list_indexes()) )
     conn.ok()
-
 
 def send_index(conn, arg):
     if len(arg) > 1:
         raise Exception("send-index takes only 1 argument. %i given.\n" % len(name))
     _init_session()
     name = arg[0]
-    assert(name.find('/') < 0)
-    assert(name.endswith('.idx'))
-    idx = git.open_idx(git.repo('objects/pack/%s' % name))
+    # TODO: Not the nicest object orientation. Fix with abstracted server-class?
+    idx = cli.send_index(name)
     conn.write(struct.pack('!I', len(idx.map)))
     conn.write(idx.map)
     conn.ok()
-
 
 def receive_objects_v2(conn, junk):
     global suspended_w
@@ -82,10 +74,7 @@ def receive_objects_v2(conn, junk):
         w = suspended_w
         suspended_w = None
     else:
-        if dumb_server_mode:
-            w = git.PackWriter(objcache_maker=None)
-        else:
-            w = git.PackWriter()
+        w = cli.new_packwriter()
     while 1:
         ns = conn.read(4)
         if not ns:
@@ -202,7 +191,7 @@ def _restore_files_bup_transfer(conn, req):
     pathstack = PathStack()
     
     debug1('bup server: waiting for initial client metadata request\n')
-    top = vfs.RefList(None)   # get top of backup tree
+    top = vfs.RefList(cli, None)   # get top of backup tree
     start = top.resolve(req.bup_path)
     
     start.name = '' # we never reuse this node, but we don't want to send the
@@ -243,7 +232,7 @@ def _restore_files_tarpipe(conn, req):
     tarmode = "w|" + req.transfermode[3:]
     tar = tarfile.open(mode=tarmode, fileobj=conn, dereference=False)
     
-    top = vfs.RefList(None)   # get top of backup tree
+    top = vfs.RefList(cli, None)   # get top of backup tree
     start = top.resolve(req.bup_path)
     
     # get the node iterator for the rest of the restore operation
@@ -381,7 +370,6 @@ def get(conn, arg):
     dio.close()
     conn.ok()
     
-    
 def cat(conn, arg):
     if len(arg) > 1:
         raise Exception("cat takes only 1 argument. %i given.\n" % len(arg))
@@ -445,8 +433,14 @@ def rev_parse(conn, arg):
         vint.write_bvec(conn, '')
     conn.ok()
 
-optspec = """
-bup server
+def size(conn, arg):
+    """server side implementation of total size calculation.
+    Returns number of bytes for each hash supplied"""
+    values = [ cli.size(hash) for hash in arg ]
+    conn.write('\n'.join(values))
+    conn.ok()
+
+optspec = """bup server
 """
 o = options.Options(optspec)
 (opt, flags, extra) = o.parse(sys.argv[1:])
@@ -472,6 +466,7 @@ commands = {
     'list-refs' : list_refs,
     'rev-list' : rev_parse,
     'cat': cat,
+    'total-size' : total_size,
 }
 
 # FIXME: this protocol is totally lame and not at all future-proof.
