@@ -78,9 +78,11 @@ def parse_commit(content):
                       committer_offset=parse_tz_offset(matches['ctz']),
                       message=matches['message'])
 
-
-def get_commit_items(id, cp):
-    commit_it = cp.get(id)
+def get_commit_items(id, catfunc):
+    """gets a list of commit items
+    :catfunc    function which reads a hash, and returns the blobs it references
+    """
+    commit_it = catfunc(id)
     assert(commit_it.next() == 'commit')
     commit_content = ''.join(commit_it)
     return parse_commit(commit_content)
