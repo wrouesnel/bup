@@ -69,6 +69,20 @@ class Consts(ProtocolConstBase):
     
     PROTOCOL_VERSION = 1    # Protocol version in this file
 
+###############
+# Helpers
+###############
+def packhash(self, sha):
+    """pack a SHA1 hash to a network-byte order struct"""
+    return struct.pack('!%is' % Consts.HASHSIZE, sha)
+
+def unpackhash(self,din):
+    """unpack a SHA1 hash to a bytestring"""
+    return struct.unpack('!%is' % Consts.HASHSIZE, din)[0]
+
+def readpackedhash(self,port):
+    return struct.unpack('!%is' % Consts.HASHSIZE, port.read(Consts.HASHSIZE))[0]
+
 ##############
 # Data structures
 ##############
