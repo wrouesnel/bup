@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import sys, os, errno
-from bup import options, git, vfs, xstat
+from bup import options, git, vfs, xstat, client
 from bup.helpers import *
 try:
     import fuse
@@ -129,8 +129,8 @@ o = options.Options(optspec)
 if len(extra) != 1:
     o.fatal("exactly one argument expected")
 
-git.check_repo_or_die()
-top = vfs.RefList(None)
+cli = client.Client(os.environ['BUP_DIR'])
+top = vfs.RefList(cli, None)
 f = BupFs(top, meta=opt.meta)
 f.fuse_args.mountpoint = extra[0]
 if opt.debug:

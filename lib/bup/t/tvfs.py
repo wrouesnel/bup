@@ -1,7 +1,7 @@
 # TODO: vfs sure could use some test coverage.
 
 import os, sys, tempfile, subprocess
-from bup import vfs, hashsplit, git
+from bup import vfs, hashsplit, git, client
 from wvtest import *
 
 top_dir = '../../..'
@@ -55,9 +55,9 @@ def test_get_file_shalist():
     file1sha = [ (ofs,sha) for (ofs,sha,size) in file1sha  ]    
     
     # compare hash to vfs hash return
-    git.check_repo_or_die(bup_dir)
+    cli = client.Client(bup_dir)
     testfile1_bup = '/test/latest' + data_path + '/testfile1'
-    n = vfs.RefList(None).lresolve(testfile1_bup)
+    n = vfs.RefList(cli, None).lresolve(testfile1_bup)
     
     blob = n.open().read(1024)
     

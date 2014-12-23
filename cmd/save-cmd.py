@@ -75,7 +75,7 @@ if opt.name and opt.name.startswith('.'):
 refname = opt.name and 'refs/heads/%s' % opt.name or None
 if opt.remote or is_reverse:
     try:
-        cli = client.Client(opt.remote)
+        cli = client.RemoteClient(opt.remote)
     except client.ClientError, e:
         log('error: %s' % e)
         sys.exit(1)

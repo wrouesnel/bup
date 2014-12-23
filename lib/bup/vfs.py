@@ -603,7 +603,7 @@ class TagDir(Node):
             if name.startswith('refs/tags/'):
                 name = name[10:]
                 date = git.get_commit_dates([sha.encode('hex')],
-                                            self.client.cat,
+                                            self.client.get,
                                             repo_dir=self._repo_dir)[0]
                 commithex = sha.encode('hex')
                 target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
@@ -677,7 +677,7 @@ class RefList(Node):
                      if name.startswith('refs/heads/')]
         dates = git.get_commit_dates([sha.encode('hex')
                                       for (name, sha) in refs_info],
-                                        self.client.cat,
+                                        self.client.get,
                                      repo_dir=self._repo_dir)
         for (name, sha), date in zip(refs_info, dates):
             n1 = BranchList(self.client, self, name, sha, self._repo_dir)

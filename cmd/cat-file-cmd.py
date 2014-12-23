@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import sys, stat
-from bup import options, git, vfs
+from bup import options, git, vfs, client
 from bup.helpers import *
 
 optspec = """
@@ -15,8 +15,8 @@ handle_ctrl_c()
 o = options.Options(optspec)
 (opt, flags, extra) = o.parse(sys.argv[1:])
 
-git.check_repo_or_die()
-top = vfs.RefList(None)
+cli = client.Client(os.environ['BUP_DIR'])
+top = vfs.RefList(cli, None)
 
 if not extra:
     o.fatal('must specify a target')

@@ -4,7 +4,7 @@ import tarfile
 import stat
 import cStringIO
 from collections import deque
-from bup import options, git, metadata, vfs, xstat, vint
+from bup import options, git, metadata, vfs, xstat, vint, client
 from bup.protocol import *
 from bup.helpers import *
 
@@ -53,6 +53,7 @@ def list_indexes(conn, junk):
     _init_session()
     suffix = ''
     conn.write( '\n'.join(cli.list_indexes()) )
+    conn.write( '\n' )
     conn.ok()
 
 def send_index(conn, arg):
@@ -466,7 +467,7 @@ commands = {
     'list-refs' : list_refs,
     'rev-list' : rev_parse,
     'cat': cat,
-    'total-size' : total_size,
+    'total-size' : size,
 }
 
 # FIXME: this protocol is totally lame and not at all future-proof.

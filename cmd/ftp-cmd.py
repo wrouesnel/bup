@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import sys, os, stat, fnmatch
-from bup import options, git, shquote, vfs, ls
+from bup import options, git, shquote, vfs, ls, client
 from bup.helpers import *
 
 handle_ctrl_c()
@@ -126,9 +126,8 @@ bup ftp [commands...]
 o = options.Options(optspec)
 (opt, flags, extra) = o.parse(sys.argv[1:])
 
-git.check_repo_or_die()
-
-top = vfs.RefList(None)
+cli = client.Client(os.environ['BUP_DIR'])
+top = vfs.RefList(cli, None)
 pwd = top
 rv = 0
 

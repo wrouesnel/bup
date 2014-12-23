@@ -1,6 +1,6 @@
 import errno, glob, grp, pwd, stat, tempfile, subprocess
 import bup.helpers as helpers
-from bup import git, metadata, vfs
+from bup import git, metadata, vfs, client
 from bup.helpers import clear_errors, detect_fakeroot, is_superuser, realpath
 from wvtest import *
 from bup.xstat import utime, lutime
@@ -133,8 +133,8 @@ def test_metadata_method():
     ex(bup_path, '-d', bup_dir, 'init')
     ex(bup_path, '-d', bup_dir, 'index', '-v', data_path)
     ex(bup_path, '-d', bup_dir, 'save', '-tvvn', 'test', data_path)
-    git.check_repo_or_die(bup_dir)
-    top = vfs.RefList(None)
+    cli = client.Client(bup_dir)
+    top = vfs.RefList(cli,None)
     n = top.lresolve('/test/latest' + realpath(data_path))
     m = n.metadata()
     WVPASS(m.mtime == test_time2)

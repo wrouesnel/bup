@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import sys, stat, urllib, mimetypes, posixpath, time, webbrowser
 import urllib
-from bup import options, git, vfs
+from bup import options, git, vfs, client
 from bup.helpers import *
 try:
     import tornado.httpserver
@@ -202,8 +202,8 @@ if len(extra) > 0:
     addressl[1] = int(addressl[1])
     address = tuple(addressl)
 
-git.check_repo_or_die()
-top = vfs.RefList(None)
+cli = client.Client(os.environ['BUP_DIR'])
+top = vfs.RefList(cli, None)
 
 settings = dict(
     debug = 1,

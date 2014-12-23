@@ -238,7 +238,7 @@ def test_commit_parsing():
         coff = (int(coffs[-4:-2]) * 60 * 60) + (int(coffs[-2:]) * 60)
         if coffs[-5] == '-':
             coff = - coff
-        commit_items = git.get_commit_items(commit, git.cp())
+        commit_items = git.get_commit_items(commit, git.cp().get)
         WVPASSEQ(commit_items.parents, [])
         WVPASSEQ(commit_items.tree, tree)
         WVPASSEQ(commit_items.author_name, 'Someone')
@@ -256,7 +256,7 @@ def test_commit_parsing():
         readpipe(['git', 'commit', '-am', 'Do something else'])
         child = readpipe(['git', 'show-ref', '-s', 'master']).strip()
         parents = showval(child, '%P')
-        commit_items = git.get_commit_items(child, git.cp())
+        commit_items = git.get_commit_items(child, git.cp().get)
         WVPASSEQ(commit_items.parents, [commit])
     finally:
         os.chdir(orig_cwd)

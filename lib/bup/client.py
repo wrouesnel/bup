@@ -17,7 +17,6 @@ bwlimit = None
 class ClientError(Exception):
     pass
 
-
 def _raw_write_bwlimit(f, buf, bwcount, bwtime):
     if not bwlimit:
         f.write(buf)
@@ -160,10 +159,8 @@ class Client:
         self._busy = 'get'
         for d in git.cp().get(id.encode('hex')):
             yield d
-        e = self.check_ok()
+        self.check_ok()
         self._not_busy()
-        if e:
-            raise KeyError(str(e))
 
     def cat(self, id):
         """cat dumps all reachable blobs. use get if you just want exactly
@@ -178,51 +175,23 @@ class Client:
             raise KeyError(str(e))
     
     def list_refs(self, refname = None):
-        """git.list_refs over bup-server shell."""
+        """git.list_refs local client wrapper"""
         self.check_busy()
         self._busy = 'list-refs'
-        if refname:
-            self.conn.write('list-refs {0}\n'.format(refname))
-        else:
-            self.conn.write('list-refs\n')
-        while 1:
-            name = vint.read_bvec(self.conn)
-            if len(name) == 0:
-                break   # empty line indicates EOF
-            sha = readpackedhash(self.conn)
-            yield (name,sha)
-        self.check_ok()
+        it = git.list_refs(refname)
         self._not_busy()
+        return it
     
     def rev_list(self, ref, count=None):
         """git.rev_list over bup-server shell"""
         self.check_busy()
         self._busy = 'rev-list'
-        if count:
-            self.conn.write('rev-list {0} {1}\n'.format(ref, count))
-        else:
-            self.conn.write('rev-list {0}\n'.format(ref))
-        while 1:
-            commit = vint.read_bvec(self.conn)
-            if len(commit) == 0:
-                break   # empty vec == eof.
-            date = vint.read_vuint(self.conn)
-            yield (date,commit)
-        self.check_ok()
         self._not_busy()
+        return git.rev_list(ref, count)
         
     def rev_parse(self, committish):
         """git.rev_parse over bup-server shell"""
-        self.check_busy()
-        self._busy = 'rev-parse'
-        self.conn.write('rev-parse {0}'.format(committish))
-        hash = vint.read_bvec(self.conn)
-        result = None
-        if len(hash) != 0:
-            result = hash
-        self.check_ok()
-        self._not_busy()
-        return result
+        return git.rev_parse(committish)
     
     def tags(self):
         """git.tags implementation over bup-server shell."""
@@ -234,7 +203,27 @@ class Client:
                     tags[c] = []
                 tags[c].append(name)  # more than one tag can point at 'c'
         return tags
-
+    
+    def list_indexes(self):
+        """returns a list of indexes for this client's repo"""
+        indices = []
+        self.check_busy()
+        self._busy = 'list_indexes'
+        for f in os.listdir(os.path.join(self.bup_repo,'objects/pack')):
+            if f.endswith('.idx'):
+                indices.append('%s' % (f,))
+        self.check_ok()
+        self._not_busy()
+        return indices
+    
+    def send_index(self, name):
+        """returns a stream containing the requested index in the
+        internal object index form"""
+        assert(name.find('/') < 0)
+        assert(name.endswith('.idx'))
+        idx = git.open_idx(git.repo('objects/pack/%s' % name))
+        return idx
+        
 class RemoteClient(Client):
     """client for remote access to a bup repository via bup-server"""
     def __init__(self, remote, create=False):
