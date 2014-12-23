@@ -29,9 +29,41 @@ class ProtocolConstBase:
 # Protocol 1
 #############
 
+class Header():
+    """header object for all protocol packets"""
+    H_NONE      = 0 # catch-all for error-conditions/keep-alives
+    H_STDERR    = 1 # stderr output (non-fatal) 
+    H_EXCEPTION = 2 # remote exception
+    H_COMMAND   = 3 # remote command
+    H_RESPONSE  = 4 # data response to a command
+
 #############
 # Exception Classes
 #############
+class ProtocolException(Exception):
+    """Base class for all exceptions that can be raised by the bup protocol.
+    Implements the serialize() method to allow remote exceptions to be
+    to be tagged and sent to remote clients.
+    """
+    @staticmethod
+    def deserialize(buffer):
+        """returns a ProtocolException or subtype"""
+        o = ProtocolException()
+        o.message = vint.unpack('s', buffer)
+        return o
+    
+    @staticmethod
+    def read(conn):
+        buffer = vint.read_bvec(conn)
+        return ProtocolException.deserialize(buffer)
+    
+    def serialize(self):
+        """returns a string containing a bvec encoded ProtocolException.
+        this is not a perfect representation of the exception, rather
+        it encodes the type and string format of the exception."""
+        data = vint.pack('b', self.message)
+        return vint.pack('b', data)
+
 class RestoreException(Exception):
     """Server exception raised from errors while handling a restore
     operation.

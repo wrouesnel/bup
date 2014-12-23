@@ -4,12 +4,13 @@ import tarfile
 import stat
 import cStringIO
 from collections import deque
-from bup import options, git, metadata, vfs, xstat, vint
+from bup import options, git, metadata, vfs, xstat, vint, client
 from bup.protocol import *
 from bup.helpers import *
 
 suspended_w = None
 dumb_server_mode = False
+cli = None
 
 def do_help(conn, junk):
     conn.write('Commands:\n    %s\n' % '\n    '.join(sorted(commands)))
@@ -24,7 +25,7 @@ def _set_mode():
 def _init_session(reinit_with_new_repopath=None):
     if reinit_with_new_repopath is None and git.repodir:
         return
-    git.check_repo_or_die(reinit_with_new_repopath)
+    cli = client.Client(bup_repo=reinit_with_new_repopath)
     # OK. we now know the path is a proper repository. Record this path in the
     # environment so that subprocesses inherit it and know where to operate.
     os.environ['BUP_DIR'] = git.repodir
@@ -36,7 +37,7 @@ def init_dir(conn, arg):
     if len(arg) > 1:
         raise Exception("init-dir takes only 1 argument. %i given.\n" % len(arg))
     path = arg[0]
-    git.init_repo(path)
+    cli = client.Client(bup_repo=path, create=True)
     debug1('bup server: bupdir initialized: %r\n' % git.repodir)
     _init_session(path)
     conn.ok()
@@ -82,10 +83,7 @@ def receive_objects_v2(conn, junk):
         w = suspended_w
         suspended_w = None
     else:
-        if dumb_server_mode:
-            w = git.PackWriter(objcache_maker=None)
-        else:
-            w = git.PackWriter()
+        w = cli.new_packwriter()
     while 1:
         ns = conn.read(4)
         if not ns:
@@ -359,19 +357,14 @@ def update_ref(conn, arg):
     git.update_ref(refname, newval.decode('hex'), oldval.decode('hex'))
     conn.ok()
 
-
-cat_pipe = None
 def get(conn, arg):
     if len(arg) > 1:
         raise Exception("get takes only 1 argument. %i given.\n" % len(arg))
     id = arg[0]
-    global cat_pipe
     _init_session()
-    if not cat_pipe:
-        cat_pipe = git.CatPipe()
     # get objects are very small, so we can reliably send the entire thing
     # as a single bvec.
-    it = cat_pipe.get(id)
+    it = cli.get(id)
     type = it.next()
     dio = cStringIO.StringIO()
     for blob in it:
@@ -386,12 +379,9 @@ def cat(conn, arg):
     if len(arg) > 1:
         raise Exception("cat takes only 1 argument. %i given.\n" % len(arg))
     id = arg[0]
-    global cat_pipe
     _init_session()
-    if not cat_pipe:
-        cat_pipe = git.CatPipe()
     try:
-        for blob in cat_pipe.join(id):
+        for blob in cli.cat(id):
             conn.write(struct.pack('!I', len(blob)))
             conn.write(blob)
     except KeyError, e:
