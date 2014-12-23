@@ -1,3 +1,10 @@
+"""
+Client abstraction library for bup.
+
+All public facing interfaces deal in binary types - calls down to the git
+layer need to encode for the command line.
+"""
+
 import re, struct, errno, time, zlib
 from bup import git, ssh
 from bup import vint
@@ -97,19 +104,54 @@ class Client:
         git.update_ref(refname, newval, oldval)
         self.check_ok()
 
+    # Former VFS helper functions. These are needed to calculate
+    # blob sizes. They are translated to client-call format.
+    # They do not need to be implemented in a remote client.
+    def _treeget(self, hash):
+        it = self.get(hash)
+        type = it.next()
+        assert(type == 'tree')
+        return git.tree_decode(''.join(it))
+    
+    def _tree_decode(self, hash):
+        tree = [(int(name,16),stat.S_ISDIR(mode),sha)
+                for (mode,name,sha)
+                in self._treeget(hash)]
+        assert(tree == list(sorted(tree)))
+        return tree
+    
+    def _chunk_len(self, hash):
+        return sum(len(b) for b in self.cat(hash('hex')))
+        
+    def _last_chunk_info(self, hash):
+        tree = self._tree_decode(hash)
+        assert(tree)
+        (ofs,isdir,sha) = tree[-1]
+        if isdir:
+            (subofs, sublen) = self._last_chunk_info(sha)
+            return (ofs+subofs, sublen)
+        else:
+            return (ofs, self._chunk_len(sha))
+
+    def _total_size(self, hash):
+        (lastofs, lastsize) = self._last_chunk_info(hash)
+        return lastofs + lastsize
+
     # TODO: implement a caching mechanism for file sizes at the repository
     # level. SQLite db maybe?
     def size(self, hash):
         """get the size in bytes of the object pointed to by hash in the
         git repository."""
         self.check_busy()
-        it = self.cat(hash)
+        it = self.get(hash)
         objtype = it.next()
         assert(objtype == 'tree' or objtype == 'blob')
+        # Must handle trees/blobs differently
         if objtype == 'tree':
-            pass
+            return self._total_size(hash)
         elif objtype == 'blob':
-            pass
+            b = ''.join(it)
+            return len(b)
 
     def get(self, id):
         """read the item pointed to by id. yields a string indicating type
