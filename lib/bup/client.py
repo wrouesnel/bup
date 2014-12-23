@@ -1,5 +1,7 @@
 import re, struct, errno, time, zlib
 from bup import git, ssh
+from bup import vint
+from bup.protocol import *
 from bup.helpers import *
 
 bwlimit = None
@@ -277,6 +279,66 @@ class Client:
         self._not_busy()
         if e:
             raise KeyError(str(e))
+    
+    def list_refs(self, refname = None):
+        """git.list_refs over bup-server shell."""
+        self.check_busy()
+        self._busy = 'list-refs'
+        if refname:
+            self.conn.write('list-refs {0}\n'.format(refname))
+        else:
+            self.conn.write('list-refs\n')
+        while 1:
+            name = vint.read_bvec(self.conn)
+            if len(name) == 0:
+                break   # empty line indicates EOF
+            sha = readpackedhash(self.conn)
+            yield (name,sha)
+        self.check_ok()
+        self._not_busy()
+    
+    # TODO
+    def rev_list(self, ref, count=None):
+        """git.rev_list over bup-server shell"""
+        self.check_busy()
+        self._busy = 'rev-list'
+        if count:
+            self.conn.write('rev-list {0} {1}\n'.format(ref, count))
+        else:
+            self.conn.write('rev-list {0}\n'.format(ref))
+        while 1:
+            commit = vint.read_bvec(self.conn)
+            if len(commit) == 0:
+                break   # empty vec == eof.
+            date = vint.read_vuint(self.conn)
+            yield (date,commit)
+        self.check_ok()
+        self._not_busy()
+        
+    # TODO
+    def rev_parse(self, committish):
+        """git.rev_parse over bup-server shell"""
+        self.check_busy()
+        self._busy = 'rev-parse'
+        self.conn.write('rev-parse {0}'.format(committish))
+        hash = vint.read_bvec(self.conn)
+        result = None
+        if len(hash) != 0:
+            result = hash
+        self.check_ok()
+        self._not_busy()
+        return result
+    
+    def tags(self):
+        """git.tags implementation over bup-server shell."""
+        tags = {}
+        for (n,c) in self.list_refs():
+            if n.startswith('refs/tags/'):
+                name = n[10:]
+                if not c in tags:
+                    tags[c] = []
+                tags[c].append(name)  # more than one tag can point at 'c'
+        return tags
 
 
 class PackWriter_Remote(git.PackWriter):
