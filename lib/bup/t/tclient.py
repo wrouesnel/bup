@@ -76,29 +76,29 @@ def test_multiple_suggestions():
         subprocess.call(['rm', '-rf', tmpdir])
 
 
-# @wvtest
-# def test_dumb_client_server():
-#     initial_failures = wvfailure_count()
-#     tmpdir = tempfile.mkdtemp(dir=bup_tmp, prefix='bup-tclient-')
-#     os.environ['BUP_MAIN_EXE'] = '../../../bup'
-#     os.environ['BUP_DIR'] = bupdir = tmpdir
-#     git.init_repo(bupdir)
-#     open(git.repo('bup-dumb-server'), 'w').close()
-# 
-#     lw = git.PackWriter()
-#     lw.new_blob(s1)
-#     lw.close()
-# 
-#     c = client.RemoteClient(bupdir, create=True)
-#     rw = c.new_packwriter()
-#     WVPASSEQ(len(glob.glob(c.cachedir+IDX_PAT)), 1)
-#     rw.new_blob(s1)
-#     WVPASSEQ(len(glob.glob(c.cachedir+IDX_PAT)), 1)
-#     rw.new_blob(s2)
-#     rw.close()
-#     WVPASSEQ(len(glob.glob(c.cachedir+IDX_PAT)), 2)
-#     if wvfailure_count() == initial_failures:
-#         subprocess.call(['rm', '-rf', tmpdir])
+@wvtest
+def test_dumb_client_server():
+    initial_failures = wvfailure_count()
+    tmpdir = tempfile.mkdtemp(dir=bup_tmp, prefix='bup-tclient-')
+    os.environ['BUP_MAIN_EXE'] = '../../../bup'
+    os.environ['BUP_DIR'] = bupdir = tmpdir
+    git.init_repo(bupdir)
+    open(git.repo('bup-dumb-server'), 'w').close()
+ 
+    lw = git.PackWriter()
+    lw.new_blob(s1)
+    lw.close()
+ 
+    c = client.RemoteClient(bupdir, create=True)
+    rw = c.new_packwriter()
+    WVPASSEQ(len(glob.glob(c.cachedir+IDX_PAT)), 1)
+    rw.new_blob(s1)
+    WVPASSEQ(len(glob.glob(c.cachedir+IDX_PAT)), 1)
+    rw.new_blob(s2)
+    rw.close()
+    WVPASSEQ(len(glob.glob(c.cachedir+IDX_PAT)), 2)
+    if wvfailure_count() == initial_failures:
+        subprocess.call(['rm', '-rf', tmpdir])
 
 
 @wvtest

@@ -85,12 +85,11 @@ if opt.name and opt.name.startswith('.'):
 refname = opt.name and 'refs/heads/%s' % opt.name or None
 if opt.noop or opt.copy:
     cli = pack_writer = oldref = None
-elif opt.remote or is_reverse:
-    cli = client.RemoteClient(opt.remote)
-    oldref = refname and cli.read_ref(refname) or None
-    pack_writer = cli.new_packwriter(compression_level=opt.compress)
-else:
-    cli = client.Client(os.environ['BUP_DIR'])
+else
+    if opt.remote or is_reverse:
+        cli = client.RemoteClient(opt.remote)
+    else:
+        cli = client.Client(os.environ['BUP_DIR'])
     oldref = refname and cli.read_ref(refname) or None
     pack_writer = cli.new_packwriter(compression_level=opt.compress)
 

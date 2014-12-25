@@ -67,6 +67,9 @@ class Client:
             git.init_repo(bup_repo)
         else:
             git.check_repo_or_die(bup_repo)
+            
+        # detect if this is a dumb server
+        self.dumb_server = os.path.exists(os.path.join(bup_repo, 'bup-dumb-server'))
 
     def __del__(self):
         """this method is provided for remote clients to inherit"""
@@ -101,7 +104,11 @@ class Client:
 
     def new_packwriter(self, compression_level = 1):
         self.check_busy()
-        return git.PackWriter(compression_level = compression_level)
+        if self.dumb_server:
+            return git.PackWriter(compression_level = compression_level,
+                                  objcache_maker=None)
+        else:
+            return git.PackWriter(compression_level = compression_level)
 
     def read_ref(self, refname):
         self.check_busy()
@@ -220,9 +227,14 @@ class Client:
         indices = []
         self.check_busy()
         self._busy = 'list_indexes'
+        
+        action = None
+        if self.dumb_server:
+            action = 'load'
+            
         for f in os.listdir(os.path.join(self.bup_repo,'objects/pack')):
             if f.endswith('.idx'):
-                indices.append('%s' % (f,))
+                indices.append((f,action))
         self.check_ok()
         self._not_busy()
         return indices
@@ -234,7 +246,7 @@ class Client:
         assert(name.endswith('.idx'))
         idx = git.open_idx(git.repo('objects/pack/%s' % name))
         return idx
-        
+    
 class RemoteClient(Client):
     """client for remote access to a bup repository via bup-server"""
     def __init__(self, remote, create=False):
@@ -628,7 +640,7 @@ class PackWriter_Remote(git.PackWriter):
 
     def abort(self):
         raise ClientError("don't know how to abort remote pack writing")
-
+oldref = refname and cli.read_ref(refname) or None
     def _raw_write(self, datalist, sha):
         assert(self.file)
         if not self._packopen:

@@ -8,9 +8,6 @@ from bup import options, git, metadata, vfs, xstat, vint, client
 from bup.protocol import *
 from bup.helpers import *
 
-import sys;sys.path.append(r'/home/will/opt/eclipse-linux/plugins/org.python.pydev_3.9.0.201411111611/pysrc')
-import pydevd;pydevd.settrace(suspend=False)
-
 suspended_w = None
 dumb_server_mode = False
 # TODO: derive a server object which can express protocol versions
@@ -57,9 +54,11 @@ def set_dir(conn, arg):
     conn.ok()
     
 def list_indexes(conn, junk):
+    """returns a list of indexes in name action format."""
     _init_session()
     suffix = ''
-    conn.write( '\n'.join(cli.list_indexes()) )
+    for i in cli.list_indexes():
+        conn.write('%s %s\n' % (i[0],i[1]))
     conn.write( '\n' )
     conn.ok()
 
@@ -341,7 +340,7 @@ def read_ref(conn, arg):
         raise Exception("read_ref takes only 1 argument. %i given.\n" % len(arg))
     refname = arg[0]
     _init_session()
-    r = cli.read_ref(refname.encode('hex'))
+    r = cli.read_ref(refname.decode('hex'))
     conn.write('%s\n' % (r or '').encode('hex'))
     conn.ok()
 
