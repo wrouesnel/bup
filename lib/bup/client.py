@@ -1,8 +1,5 @@
 """
 Client abstraction library for bup.
-
-All public facing interfaces deal in binary types - calls down to the git
-layer need to encode for the command line.
 """
 
 import re, struct, errno, time, zlib
@@ -12,7 +9,6 @@ from bup.protocol import *
 from bup.helpers import *
 
 bwlimit = None
-
 
 class ClientError(Exception):
     pass
@@ -60,15 +56,19 @@ def parse_remote(remote):
 
 class Client:
     """default bup client implementation for access to a local repository"""
-    def __init__(self, bup_repo = None, create=False):
+    def __init__(self, bup_repo, create=False):
         self._busy = None
         
+        assert(bup_repo is not None)
         self.bup_repo = bup_repo    # Keep track of bup repo path.
         
         if create:
             git.init_repo(bup_repo)
         else:
             git.check_repo_or_die(bup_repo)
+
+    def close(self):
+        """by default this does nothing for local clients"""
 
     def check_ok(self):
         """verify a client action completed successfully. For local clients
@@ -171,7 +171,7 @@ class Client:
             yield blob
         e = self.check_ok()
         self._not_busy()
-        if e:
+        if not e:
             raise KeyError(str(e))
     
     def list_refs(self, refname = None):
@@ -439,10 +439,17 @@ class RemoteClient(Client):
                            (oldval or '').encode('hex')))
         self.check_ok()
 
+    def size(self, hash):
+        raise NotImplementedError
+
+    def get(self, id):
+        raise NotImplementedError
+
     def cat(self, id):
         self.check_busy()
         self._busy = 'cat'
-        self.conn.write('cat %s\n' % re.sub(r'[\n\r]', '_', id))
+        whash = id.encode('hex')
+        self.conn.write('cat %s\n' % re.sub(r'[\n\r]', '_', whash))
         while 1:
             sz = struct.unpack('!I', self.conn.read(4))[0]
             if not sz: break
@@ -457,7 +464,7 @@ class RemoteClient(Client):
         self.check_busy()
         self._busy = 'list-refs'
         if refname:
-            self.conn.write('list-refs {0}\n'.format(refname))
+            self.conn.write('list-refs %s\n' % (refname,))
         else:
             self.conn.write('list-refs\n')
         while 1:
@@ -490,7 +497,7 @@ class RemoteClient(Client):
         """git.rev_parse over bup-server shell"""
         self.check_busy()
         self._busy = 'rev-parse'
-        self.conn.write('rev-parse {0}'.format(committish))
+        self.conn.write('rev-parse %s\n' % (committish,))
         hash = vint.read_bvec(self.conn)
         result = None
         if len(hash) != 0:
@@ -509,6 +516,12 @@ class RemoteClient(Client):
                     tags[c] = []
                 tags[c].append(name)  # more than one tag can point at 'c'
         return tags
+    
+    def list_indexes(self):
+        raise NotImplementedError
+    
+    def send_index(self, name):
+        raise NotImplementedError
 
 
 class PackWriter_Remote(git.PackWriter):

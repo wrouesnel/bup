@@ -8,6 +8,9 @@ from bup import options, git, metadata, vfs, xstat, vint, client
 from bup.protocol import *
 from bup.helpers import *
 
+import sys;sys.path.append(r'/home/will/opt/eclipse-linux/plugins/org.python.pydev_3.9.0.201411111611/pysrc')
+import pydevd;pydevd.settrace(suspend=False)
+
 suspended_w = None
 dumb_server_mode = False
 # TODO: derive a server object which can express protocol versions
@@ -27,6 +30,8 @@ def _init_session(reinit_with_new_repopath=None):
     global cli
     if reinit_with_new_repopath is None and cli is not None:
         return
+    if reinit_with_new_repopath is None:
+        reinit_with_new_repopath = os.environ.get('BUP_DIR')
     cli = client.Client(reinit_with_new_repopath)
     debug1('bup server: bupdir is %r\n' % cli.bup_repo)
     _set_mode()
@@ -36,6 +41,8 @@ def init_dir(conn, arg):
     if len(arg) > 1:
         raise Exception("init-dir takes only 1 argument. %i given.\n" % len(arg))
     path = arg[0]
+    if path is None:
+        path = os.environ.get('BUP_DIR')
     # This is a bit of legacy. But _init_session will fallthrough correctly.
     cli = client.Client(path, create=True)
     debug1('bup server: bupdir initialized: %r\n' % cli.bup_repo)
@@ -334,7 +341,7 @@ def read_ref(conn, arg):
         raise Exception("read_ref takes only 1 argument. %i given.\n" % len(arg))
     refname = arg[0]
     _init_session()
-    r = git.read_ref(refname)
+    r = cli.read_ref(refname.encode('hex'))
     conn.write('%s\n' % (r or '').encode('hex'))
     conn.ok()
 
@@ -346,7 +353,7 @@ def update_ref(conn, arg):
     _init_session()
     newval = conn.readline().strip()
     oldval = conn.readline().strip()
-    git.update_ref(refname, newval.decode('hex'), oldval.decode('hex'))
+    cli.update_ref(refname, newval.decode('hex'), oldval.decode('hex'))
     conn.ok()
 
 
@@ -427,7 +434,8 @@ def rev_list(conn, extra):
 def rev_parse(conn, arg):
     """server wrapper for bup.git.rev_parse. writes output as a bvec,
     0 length for None."""
-    result = git.rev_parse(arg)
+    committish = arg[0]
+    result = git.rev_parse(committish)
     if result:
         vint.write_bvec(conn, result)
     else:
@@ -465,7 +473,8 @@ commands = {
     'read-ref': read_ref,
     'update-ref': update_ref,
     'list-refs' : list_refs,
-    'rev-list' : rev_parse,
+    'rev-list' : rev_list,
+    'rev-parse' : rev_parse,
     'cat': cat,
     'total-size' : size,
 }

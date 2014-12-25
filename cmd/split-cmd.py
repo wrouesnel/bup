@@ -86,13 +86,13 @@ refname = opt.name and 'refs/heads/%s' % opt.name or None
 if opt.noop or opt.copy:
     cli = pack_writer = oldref = None
 elif opt.remote or is_reverse:
-    cli = client.Client(opt.remote)
+    cli = client.RemoteClient(opt.remote)
     oldref = refname and cli.read_ref(refname) or None
     pack_writer = cli.new_packwriter(compression_level=opt.compress)
 else:
-    cli = None
-    oldref = refname and git.read_ref(refname) or None
-    pack_writer = git.PackWriter(compression_level=opt.compress)
+    cli = client.Client(os.environ['BUP_DIR'])
+    oldref = refname and cli.read_ref(refname) or None
+    pack_writer = cli.new_packwriter(compression_level=opt.compress)
 
 if opt.git_ids:
     # the input is actually a series of git object ids that we should retrieve

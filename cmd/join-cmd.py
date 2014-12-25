@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 import sys
+import os
 from bup import git, options, client
 from bup.helpers import *
-
 
 optspec = """
 bup join [-r host:path] [refs or hashes...]
@@ -21,11 +21,9 @@ if not extra:
 ret = 0
 
 if opt.remote:
-    cli = client.Client(opt.remote)
-    cat = cli.cat
+    cli = client.RemoteClient(opt.remote)
 else:
-    cp = git.CatPipe()
-    cat = cp.join
+    cli = client.Client(os.environ['BUP_DIR'])
 
 if opt.o:
     outfile = open(opt.o, 'wb')
@@ -33,8 +31,12 @@ else:
     outfile = sys.stdout
 
 for id in extra:
+    # The client functions don't understand non-SHAs, but some things assume
+    # they can use committish style references. rev_parse is provided to
+    # solve this problem.
+    sha = cli.rev_parse(id)
     try:
-        for blob in cat(id):
+        for blob in cli.cat(sha):
             outfile.write(blob)
     except KeyError, e:
         outfile.flush()
