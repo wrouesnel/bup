@@ -468,10 +468,12 @@ class RemoteClient(Client):
         else:
             self.conn.write('list-refs\n')
         while 1:
-            name = vint.read_bvec(self.conn)
-            if len(name) == 0:
+            line = self.conn.readline().strip()
+            fields = line.split(' ')
+            if len(fields) == 1: # if end of output
                 break   # empty line indicates EOF
-            sha = readpackedhash(self.conn)
+            name = fields[0]
+            sha = fields[1]
             yield (name,sha)
         self.check_ok()
         self._not_busy()
@@ -481,14 +483,16 @@ class RemoteClient(Client):
         self.check_busy()
         self._busy = 'rev-list'
         if count:
-            self.conn.write('rev-list {0} {1}\n'.format(ref, count))
+            self.conn.write('rev-list %s %s\n' % (ref, count))
         else:
-            self.conn.write('rev-list {0}\n'.format(ref))
+            self.conn.write('rev-list %s\n' % (ref,))
         while 1:
-            commit = vint.read_bvec(self.conn)
-            if len(commit) == 0:
-                break   # empty vec == eof.
-            date = vint.read_vuint(self.conn)
+            line = self.conn.readline().strip()
+            fields = line.split(' ')
+            if len(fields) == 1: # if end of output
+                break
+            date = int(fields[0])
+            commit = fields[1].decode('hex')
             yield (date,commit)
         self.check_ok()
         self._not_busy()
@@ -498,16 +502,18 @@ class RemoteClient(Client):
         self.check_busy()
         self._busy = 'rev-parse'
         self.conn.write('rev-parse %s\n' % (committish,))
-        hash = vint.read_bvec(self.conn)
         result = None
-        if len(hash) != 0:
-            result = hash
+        committish = self.conn.readline().strip()
+        if len(committish) != 0:
+            result = committish.decode('hex')
         self.check_ok()
         self._not_busy()
         return result
     
     def tags(self):
         """git.tags implementation over bup-server shell."""
+        self.check_busy()
+        self._busy = 'tags'
         tags = {}
         for (n,c) in self.list_refs():
             if n.startswith('refs/tags/'):

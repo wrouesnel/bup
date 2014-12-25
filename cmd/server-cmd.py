@@ -356,7 +356,6 @@ def update_ref(conn, arg):
     cli.update_ref(refname, newval.decode('hex'), oldval.decode('hex'))
     conn.ok()
 
-
 cat_pipe = None
 def get(conn, arg):
     if len(arg) > 1:
@@ -403,14 +402,13 @@ def list_refs(conn, refname = None):
     bvec and struct packed data, terminates with an empty bvec."""
     _init_session()
     for name, sha in git.list_refs(refname):
-        vint.write_bvec(conn, name)
-        conn.write(packhash(sha))
-    vint.write_bvec(conn, '')
+        conn.write('%s %s\n' % (name, sha.encode('hex')))
+    conn.write('\n')
     conn.ok()
 
 def rev_list(conn, extra):
     """server wrapper for bup.git.rev_list. writes output as 
-    vint,packedhash pairs"""
+    epochtime commit_hash pairs"""
     args = extra.split(' ')
     count = None
     ref = None
@@ -424,22 +422,32 @@ def rev_list(conn, extra):
     else:
         raise Exception("rev-list requires at least 1 argument")
     for date,commit in git.rev_list(ref, count):
-        # We reverse the tuple format, since a 0-length bvec then becomes
-        # the EOF signal.
-        vint.write_bvec(conn, commit)
-        vint.write_vuint(conn, date)
-    vint.write_bvec(conn, commit)
+        conn.write('%i %s\n' % (date, commit))
+    conn.write('\n')
     conn.ok()
 
 def rev_parse(conn, arg):
     """server wrapper for bup.git.rev_parse. writes output as a bvec,
     0 length for None."""
+    if len(arg) > 1:
+        raise Exception('rev-parse takes at most 1 argument. %i given.' % len(arg))
     committish = arg[0]
     result = git.rev_parse(committish)
     if result:
-        vint.write_bvec(conn, result)
+        conn.write('%s\n' % result.encode('hex'))
     else:
-        vint.write_bvec(conn, '')
+        conn.write('\n')
+    conn.ok()
+
+def tags(conn, arg):
+    if len(arg) > 0:
+        raise Exception('tags takes at most 0 arguments. %i given.' % len(arg))
+    for commit,items in cli.tags().iteritems():
+        conn.write('%s' % (commit,))
+        for i in items:
+            self.conn.write(' %s' % (i,))
+        conn.write('\n')
+    conn.write('\n')
     conn.ok()
 
 def size(conn, arg):
@@ -447,6 +455,7 @@ def size(conn, arg):
     Returns number of bytes for each hash supplied"""
     values = [ cli.size(hash) for hash in arg ]
     conn.write('\n'.join(values))
+    conn.write('\n')
     conn.ok()
 
 optspec = """bup server
@@ -476,7 +485,7 @@ commands = {
     'rev-list' : rev_list,
     'rev-parse' : rev_parse,
     'cat': cat,
-    'total-size' : size,
+    'total-size' : size
 }
 
 # FIXME: this protocol is totally lame and not at all future-proof.
