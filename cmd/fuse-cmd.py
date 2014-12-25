@@ -122,6 +122,7 @@ d,debug   increase debug level
 f,foreground  run in foreground
 o,allow-other allow other users to access the filesystem
 meta          report original metadata for paths when available
+r,remote=    url of remote repository
 """
 o = options.Options(optspec)
 (opt, flags, extra) = o.parse(sys.argv[1:])
@@ -129,7 +130,10 @@ o = options.Options(optspec)
 if len(extra) != 1:
     o.fatal("exactly one argument expected")
 
-cli = client.Client(os.environ['BUP_DIR'])
+if opt.remote:
+    cli = client.RemoteClient(opt.remote)
+else:
+    cli = client.Client(os.environ['BUP_DIR'])
 top = vfs.RefList(cli, None)
 f = BupFs(top, meta=opt.meta)
 f.fuse_args.mountpoint = extra[0]

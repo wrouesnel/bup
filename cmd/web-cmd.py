@@ -189,6 +189,7 @@ bup web [[hostname]:port]
 --
 human-readable    display human readable file sizes (i.e. 3.9K, 4.7M)
 browser           open the site in the default browser
+r,remote=         url of remote repository
 """
 o = options.Options(optspec)
 (opt, flags, extra) = o.parse(sys.argv[1:])
@@ -202,7 +203,11 @@ if len(extra) > 0:
     addressl[1] = int(addressl[1])
     address = tuple(addressl)
 
-cli = client.Client(os.environ['BUP_DIR'])
+if opt.remote:
+    cli = client.RemoteClient(opt.remote)
+else:
+    cli = client.Client(os.environ['BUP_DIR'])
+
 top = vfs.RefList(cli, None)
 
 settings = dict(

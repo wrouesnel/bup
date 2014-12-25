@@ -18,6 +18,7 @@ map-group=  given OLD=NEW, restore OLD group as NEW group
 map-uid=    given OLD=NEW, restore OLD uid as NEW uid
 map-gid=    given OLD=NEW, restore OLD gid as NEW gid
 q,quiet     don't show progress meter
+r,remote=   url of remote repository to restore from
 """
 
 total_restored = 0
@@ -290,7 +291,10 @@ handle_ctrl_c()
 o = options.Options(optspec)
 (opt, flags, extra) = o.parse(sys.argv[1:])
 
-cli = client.Client(os.environ['BUP_DIR'])
+if opt.remote:
+    cli = client.RemoteClient(opt.remote)
+else:
+    cli = client.Client(os.environ['BUP_DIR'])
 top = vfs.RefList(cli, None)
 
 if not extra:
