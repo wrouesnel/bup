@@ -372,9 +372,10 @@ def get(conn, arg):
     dio = cStringIO.StringIO()
     for blob in it:
         dio.write(blob)
-    vint.write_bvec(conn, type)
-    vint.write_bvec(conn, dio.getvalue())
+    data = dio.getvalue()
     dio.close()
+    conn.write(struct.pack('!I', len(data)))
+    conn.write(data)
     conn.ok()
     
 def cat(conn, arg):
@@ -485,7 +486,7 @@ commands = {
     'rev-list' : rev_list,
     'rev-parse' : rev_parse,
     'cat': cat,
-    'total-size' : size
+    'size' : size
 }
 
 # FIXME: this protocol is totally lame and not at all future-proof.

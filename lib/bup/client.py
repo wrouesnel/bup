@@ -7,6 +7,7 @@ from bup import git, ssh
 from bup import vint
 from bup.protocol import *
 from bup.helpers import *
+import cStringIO
 
 bwlimit = None
 
@@ -66,6 +67,16 @@ class Client:
             git.init_repo(bup_repo)
         else:
             git.check_repo_or_die(bup_repo)
+
+    def __del__(self):
+        """this method is provided for remote clients to inherit"""
+        try:
+            self.close()
+        except IOError, e:
+            if e.errno == errno.EPIPE:
+                pass
+            else:
+                raise
 
     def close(self):
         """by default this does nothing for local clients"""
@@ -434,16 +445,35 @@ class RemoteClient(Client):
 
     def update_ref(self, refname, newval, oldval):
         self.check_busy()
+        self._busy = 'update-ref'
         self.conn.write('update-ref %s\n%s\n%s\n' 
                         % (refname, newval.encode('hex'),
                            (oldval or '').encode('hex')))
         self.check_ok()
+        self._not_busy()
 
-    def size(self, hash):
-        raise NotImplementedError
+    def size(self, id):
+        self.check_busy()
+        self._busy = 'size'
+        self.conn.write('size %s\n' % (id.encode('hex')) )
+        result = self.conn.readline().strip()
+        self.check_ok()
+        self._not_busy()
+        return int(result)
 
     def get(self, id):
-        raise NotImplementedError
+        self.check_busy()
+        self._busy = 'get'
+        whash = id.encode('hex')
+        self.conn.write('get %s\n' % re.sub(r'[\n\r]', '_', whash))
+        
+        sz = struct.unpack('!I', self.conn.read(4))[0]
+        data = self.conn.read(sz)
+        e = self.check_ok()
+        self._not_busy()
+        if not e:
+            raise KeyError(str(e))
+        return data
 
     def cat(self, id):
         self.check_busy()
@@ -512,6 +542,7 @@ class RemoteClient(Client):
     
     def tags(self):
         """git.tags implementation over bup-server shell."""
+        raise NotImplementedError
         self.check_busy()
         self._busy = 'tags'
         tags = {}
@@ -524,11 +555,42 @@ class RemoteClient(Client):
         return tags
     
     def list_indexes(self):
-        raise NotImplementedError
+        self.check_busy()
+        self._busy = 'list-indexes'
+        self.conn.write('list-indexes\n')
+        indices = []
+        while 1:
+            line = self.conn.readline().strip()
+            if len(line) == 0:
+                break
+            indices.append(line)
+        self.check_ok()
+        self._not_busy()
+        return indices
     
     def send_index(self, name):
-        raise NotImplementedError
-
+        """for a remote client this would only ever be used for some type of
+        proxying, and is configured as such. It will download a remote
+        index file if it does not exist locally and then return an open
+        object to it."""
+        self.check_busy()
+        self._busy = 'send-index'
+        
+        # Check if remote index exists locally
+        fn = os.path.join(self.cachedir, name)
+        if not os.path.exists(fn):
+            self.conn.write('send-index  %s\n' % (name,))
+            length = struct.unpack('!I', self.conn.read(4))
+            with atomically_replaced_file(fn, 'w') as f:
+                count = 0
+                for b in chunkyreader(self.conn, length):
+                    f.write(b)
+                    count += len(b)
+                self.check_ok()    
+        # Open just received index and return it
+        idx = git.open_idx(git.repo('objects/pack/%s' % name))
+        self._not_busy()
+        return idx
 
 class PackWriter_Remote(git.PackWriter):
     def __init__(self, conn, objcache_maker, suggest_packs,
