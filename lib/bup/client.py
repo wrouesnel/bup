@@ -112,7 +112,7 @@ class Client:
 
     def read_ref(self, refname):
         self.check_busy()
-        r = git.read_ref(refname)
+        r = git.read_ref(refname.encode('hex'))
         self.check_ok() # FIXME: is there any reason a local client needs this?
         return r
 
@@ -446,7 +446,7 @@ class RemoteClient(Client):
 
     def read_ref(self, refname):
         self.check_busy()
-        self.conn.write('read-ref %s\n' % refname)
+        self.conn.write('read-ref %s\n' % refname.encode('hex'))
         r = self.conn.readline().strip()
         self.check_ok()
         if r:
@@ -640,7 +640,7 @@ class PackWriter_Remote(git.PackWriter):
 
     def abort(self):
         raise ClientError("don't know how to abort remote pack writing")
-oldref = refname and cli.read_ref(refname) or None
+
     def _raw_write(self, datalist, sha):
         assert(self.file)
         if not self._packopen:
