@@ -53,7 +53,7 @@ CREATE TABLE stat (
     mtime_ns   INTEGER,
     ctime      INTEGER,
     ctime_ns   INTEGER
-) WITHOUT ROWID;
+);
 
 CREATE TABLE filesystem (
     fsid    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -289,7 +289,7 @@ class Index:
                 raise CorruptIndex('got more then 1 identical name in same directory')
         
         # Create the rest of the tree that we need
-        for idx in range(highest_idx, len(pc)-1):
+        for idx in range(highest_idx, len(pc)):
             # Create the filesystem item (with blank metadata)
             self.cur.execute('''INSERT INTO filesystem (name) 
                         VALUES (?);''', (sqlite3.Binary(pc[idx][0]),))
@@ -306,7 +306,6 @@ class Index:
             # Set new ancestor object
             ancestor = descendant
             self.levels.append((pc[idx][0], ancestor)) # store new path
-            higest_idx = idx
             
         # By the time we get here the real object should exist and be
         # the ancestor. All we need to do is update it with the real
@@ -321,30 +320,23 @@ class Index:
             (gitmode, sha) = (0, None)
         
         shamissing = False  # Should we set shamissing always?
+        
         exists = False if pst is None else True
+        
         sha_blob = None if sha is None else sqlite3.Binary(sha)
         
         metaid = None
         if meta:
             metaid = self._insert_or_ignore_fs_meta(meta)
         
-        # Create the filesystem item (with blank metadata)
-        self.cur.execute('''INSERT INTO 
-        filesystem  (name,gitmode,fs_exists,hashvalid,shamissing,hash,metaid) 
-        VALUES (?,?,?,?,?,?,?);''', 
-        (sqlite3.Binary(pc[highest_idx][0]),gitmode,exists,hashvalid,shamissing,sha_blob,metaid))
-        descendant = self.cur.lastrowid  # Get the FSID and update the ancestors
-        
-        # Create a new descendant item in the tree
-        self.cur.execute('''INSERT INTO tree (fsid,ancestor) 
-        VALUES (?,?);''', (descendant, ancestor))
-        
-        # Update the ancestor items to point to this descendant
-        self.cur.execute('''UPDATE tree SET descendant=? 
-        WHERE fsid = ?;''', (descendant,ancestor))
+        self.cur.execute('''UPDATE filesystem 
+        SET gitmode=?, fs_exists=?, hashvalid=?, shamissing=?, hash=?,
+        metaid=? 
+        WHERE fsid=?''',
+        (gitmode,exists,hashvalid,shamissing,sha_blob,metaid,ancestor))
         
         # Add additional metadata
-        self._insert_or_replace_fs_stat(descendant, pst)
+        self._insert_or_replace_fs_stat(ancestor, pst)
         return ancestor # Return the fsid for other users
     
     def clear(self):
