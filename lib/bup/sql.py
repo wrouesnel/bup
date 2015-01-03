@@ -12,7 +12,7 @@ import os
 import sqlite3
 
 import metadata, os, stat, struct, tempfile
-from bup import xstat
+from bup import xstat, git
 from bup.helpers import *
 
 # Constants
@@ -36,10 +36,6 @@ CREATE TABLE meta (
     metablob  BLOB UNIQUE
 );
 
-CREATE INDEX metablobs ON meta (
-    metablob
-);
-
 CREATE TABLE stat (
     fsid       INTEGER NOT NULL PRIMARY KEY,
     
@@ -60,7 +56,7 @@ CREATE TABLE stat (
 );
 
 CREATE TABLE filesystem (
-    fsid    INTEGER NOT NULL PRIMARY KEY,
+    fsid    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     name    BLOB NOT NULL,
     gitmode INTEGER,
     hash    BLOB,
@@ -70,11 +66,14 @@ CREATE TABLE filesystem (
     shamissing  INTEGER
 );
 
+CREATE INDEX filesystem_name ON filesystem (name);
+
 CREATE TABLE tree (
-    fsid        INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    fsid        INTEGER NOT NULL,
     ancestor    INTEGER,
-    descendant  INTEGER
-);
+    descendant  INTEGER,
+    PRIMARY KEY (fsid,ancestor)
+) WITHOUT ROWID;
 
 PRAGMA user_version=%i;
 """ % VERSION
@@ -110,6 +109,12 @@ class Index:
         self._check_schema()
         
         self.cur = self.db.cursor()
+        
+        # Database caching variables
+        # It is not efficient to hit the disk on every filepath, and sqlite
+        # works best with bulk queries.
+        self.levels = []    # Stores most recent FSID path to speed drecurse inserts
+        self.metacache = {} # Stores meta SHA1/metaid mappings to avoid database lookups
         
     def __del__(self):
         self.db.commit()
@@ -151,25 +156,36 @@ class Index:
         st.st_uid, st.st_gid, st.st_rdev, st.st_size, 
          atime[0], atime[1], mtime[0], mtime[1], ctime[0], ctime[1]))
     
-    def _insert_or_ignore_fs_meta(self, fsid, meta):
-        """deduplicates encoded FS metadata objects into the database"""
-        sqlbinary = sqlite3.Binary(meta.encode())
+    def _insert_or_ignore_fs_meta(self, meta):
+        """deduplicates encoded FS metadata objects into the database.
+        data is deduplicated by storing an in-memory table of hashes
+        to meta ID mappings.
+        """
+        # TODO: maintain dict size somehow
+        metadata = meta.encode()
+        metasha = Sha1(metadata)
+        metablob = sqlite3.Binary(meta.encode())
         
-        self.cur.execute('''SELECT metaid FROM meta 
-        WHERE metablob=?''', (sqlbinary,))
-        r = self.cur.fetchall()
-        assert(len(r) <= 1)
-        # If this metadata exists, deduplicate it.
-        if len(r) == 0:
-            self.cur.execute('''INSERT INTO meta (metablob)
-            VALUES (?)''', (sqlbinary,))
-            metaid = self.cur.lastrowid
-        else:
-            metaid = r[0]['metaid']
+        # Lookup sha first
+        metaid = self.metacache.get(metasha, None)
+        if metaid is None:
+            # Query and insert
+            self.cur.execute('''SELECT metaid FROM meta 
+            WHERE metablob=?''', (metablob,))
+            r = self.cur.fetchall()
+            assert(len(r) <= 1)
+            # If this metadata exists, deduplicate it.
+            if len(r) == 0:
+                self.cur.execute('''INSERT INTO meta (metablob)
+                VALUES (?)''', (metablob,))
+                metaid = self.cur.lastrowid
+            else:
+                metaid = r[0]['metaid']
+            # Update in-memory cache
+            self.metacache[metasha] = metaid
         
-        # Update meta-id on filesystem object row
-        self.cur.execute('''UPDATE filesystem 
-        SET metaid=? WHERE fsid=?''', (metaid,fsid))
+        assert(metaid is not None)
+        return metaid
 
     def __iter__(self):
         """default iterator method - akin to iterating over root"""
@@ -226,13 +242,35 @@ class Index:
         can perform an arbitrary insert of a full path."""
         # Ensure we're dealing with an absolute path
         rp = realpath(path)
+        
         # Break into components
         pc = path_components(rp)
         
-        ancestor = 0
-        highest_idx = 0 
-        # Find the lowest point in the tree we can descend
-        for idx,(name,fullpath) in enumerate(pc):
+        ancestor = 0 # fsid we want to start from
+        highest_idx = 0 # how much of the path already exists
+        
+        # See how much of the path fsid we already know
+        # This is derecurse aware, but not required - you can safely
+        # jump around and but take a performance hit.
+        for idx, (name,fsid) in enumerate(self.levels):
+            # did we run out of path components to check (already have all)
+            if idx > len(pc)-1:
+                break
+            highest_idx = idx   # Mark the idx we're up to
+            if pc[idx][0] != name:
+                # name does not match - can't match more. 
+                break
+            # If we didn't match, then this idx becomes an ancestor
+            ancestor = fsid
+            
+ 
+        # Slice known path back to what we know
+        self.levels = self.levels[:highest_idx]
+ 
+        # Query for the remainder of the tree that we need
+        for idx in range(highest_idx, len(pc)):
+            name = pc[idx][0]
+            
             self.cur.execute('''
             SELECT tree.fsid FROM tree
             INNER JOIN filesystem ON tree.fsid = filesystem.fsid
@@ -246,27 +284,28 @@ class Index:
                 break
             elif len(rows) == 1:
                 ancestor = rows[0]['fsid']
+                self.levels.append((name, ancestor)) # store new path
             else:
                 raise CorruptIndex('got more then 1 identical name in same directory')
         
-        # Create the rest of the needed directory entries
+        # Create the rest of the tree that we need
         for idx in range(highest_idx, len(pc)):
-            # Create a new descendant item
-            self.cur.execute('''INSERT INTO tree (ancestor) VALUES (?);''',
-                        (ancestor,))
+            # Create the filesystem item (with blank metadata)
+            self.cur.execute('''INSERT INTO filesystem (name) 
+                        VALUES (?);''', (sqlite3.Binary(pc[idx][0]),))
             descendant = self.cur.lastrowid  # Get the FSID and update the ancestors
+            
+            # Create a new descendant item in the tree
+            self.cur.execute('''INSERT INTO tree (fsid,ancestor) 
+            VALUES (?,?);''', (descendant, ancestor))
             
             # Update the ancestor items to point to this descendant
             self.cur.execute('''UPDATE tree SET descendant=? 
             WHERE fsid = ?;''', (descendant,ancestor))
             
-            # Create the filesystem item (with blank metadata)
-            self.cur.execute('''INSERT INTO filesystem (fsid,name) 
-                        VALUES (?,?);''',
-                        (descendant, sqlite3.Binary(pc[idx][0])))
-            
             # Set new ancestor object
             ancestor = descendant
+            self.levels.append((pc[idx][0], ancestor)) # store new path
             
         # By the time we get here the real object should exist and be
         # the ancestor. All we need to do is update it with the real
@@ -284,15 +323,20 @@ class Index:
         
         exists = False if pst is None else True
         
+        sha_blob = None if sha is None else sqlite3.Binary(sha)
+        
+        metaid = None
+        if meta:
+            metaid = self._insert_or_ignore_fs_meta(meta)
+        
         self.cur.execute('''UPDATE filesystem 
-        SET gitmode=?, fs_exists=?, hashvalid=?, shamissing=?, hash=? 
+        SET gitmode=?, fs_exists=?, hashvalid=?, shamissing=?, hash=?,
+        metaid=? 
         WHERE fsid=?''',
-        (gitmode,exists,hashvalid,shamissing,sqlite3.Binary(sha),ancestor))
+        (gitmode,exists,hashvalid,shamissing,sha_blob,metaid,ancestor))
         
         # Add additional metadata
         self._insert_or_replace_fs_stat(ancestor, pst)
-        if meta:
-            self._insert_or_ignore_fs_meta(ancestor, meta)
         return ancestor # Return the fsid for other users
     
     def clear(self):
