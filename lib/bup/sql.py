@@ -9,7 +9,7 @@ maximize compatibility.
 
 import sys
 import os
-import apsw
+import sqlite3
 
 import metadata, os, stat, struct, tempfile
 from bup import xstat, git
@@ -101,14 +101,14 @@ class Index:
         if not os.path.exists(self.dbpath):
             self._create_database()
         
-        self.db = apsw.Connection(dbpath)
-        #self.db.row_factory = sqlite3.Row
-        self.cur = self.db.cursor()
-        self.cur.execute('BEGIN;')
+        self.db = sqlite3.connect(dbpath)
+        self.db.row_factory = sqlite3.Row
         
         # Check schema version
         self._check_schema()
-
+        
+        self.cur = self.db.cursor()
+        
         # Database caching variables
         # It is not efficient to hit the disk on every filepath, and sqlite
         # works best with bulk queries.
@@ -116,31 +116,31 @@ class Index:
         self.metacache = {} # Stores meta SHA1/metaid mappings to avoid database lookups
         
     def __del__(self):
-        self.cur.execute('COMMIT;')
+        self.db.commit()
         self.db.close()
 
     def _check_schema(self):
         '''verify the database schema is as we expect it to be'''
-        result = self.cur.execute('PRAGMA user_version;').fetchone()
-        if result[0] != VERSION:
+        result = self.db.execute('PRAGMA user_version;').fetchone()
+        if result['user_version'] != VERSION:
             raise SchemaMismatch('index schema mismatch', 
                                  result['user_version'], VERSION) 
 
     def _create_database(self):
         '''create and initialize a new schema'''
-        db = apsw.Connection(self.dbpath)
-        cur = db.cursor()
-        #db.row_factory = sqlite3.Row
+        db = sqlite3.connect(self.dbpath)
+        db.row_factory = sqlite3.Row
         
         # Check we connected to a blank DB
-        result = cur.execute('PRAGMA user_version;').fetchone()
-        if result[0] != 0:
+        result = db.execute('PRAGMA user_version;').fetchone()
+        if result['user_version'] != 0:
             log('database created before we could get to it.')
             db.close()
             return
         
         # The database is empty, try and create it. This should not fail.
-        cur.execute(INDEX_DB)
+        db.executescript(INDEX_DB)
+        db.commit()
         db.close()
 
     def _insert_or_replace_fs_stat(self, fsid, st):
@@ -163,7 +163,7 @@ class Index:
         # TODO: maintain dict size somehow
         metadata = meta.encode()
         metasha = Sha1(metadata)
-        metablob = buffer(meta.encode())
+        metablob = sqlite3.Binary(meta.encode())
         
         # Lookup sha first
         metaid = self.metacache.get(metasha, None)
@@ -175,11 +175,11 @@ class Index:
             assert(len(r) <= 1)
             # If this metadata exists, deduplicate it.
             if len(r) == 0:
-                metaid = self.cur.execute('''
-                INSERT INTO meta (metablob) VALUES (?);
-                SELECT last_insert_rowid();''', (metablob,)).next()[0]
+                self.cur.execute('''INSERT INTO meta (metablob)
+                VALUES (?)''', (metablob,))
+                metaid = self.cur.lastrowid
             else:
-                metaid = r[0][0]
+                metaid = r[0]['metaid']
             # Update in-memory cache
             self.metacache[metasha] = metaid
         
@@ -274,7 +274,7 @@ class Index:
             SELECT tree.fsid FROM tree
             INNER JOIN filesystem ON tree.fsid = filesystem.fsid
             WHERE filesystem.name = ? AND ancestor = ?;''',
-            (buffer(name), ancestor))
+            (sqlite3.Binary(name), ancestor))
             
             highest_idx = idx
             
@@ -282,7 +282,7 @@ class Index:
             if len(rows) == 0:
                 break
             elif len(rows) == 1:
-                ancestor = rows[0][0]
+                ancestor = rows[0]['fsid']
                 self.levels.append((name, ancestor)) # store new path
             else:
                 raise CorruptIndex('got more then 1 identical name in same directory')
@@ -290,14 +290,14 @@ class Index:
         # Create the rest of the tree that we need
         for idx in range(highest_idx, len(pc)):
             # Create a new descendant item in the tree
-            descendant = self.cur.execute('''
-            INSERT INTO tree (ancestor) VALUES (?);
-            SELECT last_insert_rowid();''', (ancestor,)).next()[0]
+            self.cur.execute('''INSERT INTO tree (ancestor) 
+            VALUES (?);''', (ancestor,))
+            descendant = self.cur.lastrowid  # Get the FSID and update the ancestors
             
             # Create the filesystem item (with blank metadata)
             self.cur.execute('''INSERT INTO filesystem (fsid,name) 
                         VALUES (?,?);''', 
-                        (descendant,buffer(pc[idx][0])))
+                        (descendant,sqlite3.Binary(pc[idx][0])))
             1
             # Update the ancestor items to point to this descendant
             self.cur.execute('''UPDATE tree SET descendant=? 
@@ -323,7 +323,7 @@ class Index:
         
         exists = False if pst is None else True
         
-        sha_blob = None if sha is None else buffer(sha)
+        sha_blob = None if sha is None else sqlite3.Binary(sha)
         
         metaid = None
         if meta:
