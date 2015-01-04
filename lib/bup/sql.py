@@ -56,7 +56,7 @@ CREATE TABLE stat (
 );
 
 CREATE TABLE filesystem (
-    fsid    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    fsid    INTEGER NOT NULL PRIMARY KEY,
     name    BLOB NOT NULL,
     gitmode INTEGER,
     hash    BLOB,
@@ -69,11 +69,10 @@ CREATE TABLE filesystem (
 CREATE INDEX filesystem_name ON filesystem (name);
 
 CREATE TABLE tree (
-    fsid        INTEGER NOT NULL,
+    fsid        INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     ancestor    INTEGER,
-    descendant  INTEGER,
-    PRIMARY KEY (fsid,ancestor)
-) WITHOUT ROWID;
+    descendant  INTEGER
+);
 
 PRAGMA user_version=%i;
 """ % VERSION
@@ -290,15 +289,16 @@ class Index:
         
         # Create the rest of the tree that we need
         for idx in range(highest_idx, len(pc)):
-            # Create the filesystem item (with blank metadata)
-            self.cur.execute('''INSERT INTO filesystem (name) 
-                        VALUES (?);''', (sqlite3.Binary(pc[idx][0]),))
+            # Create a new descendant item in the tree
+            self.cur.execute('''INSERT INTO tree (ancestor) 
+            VALUES (?);''', (ancestor,))
             descendant = self.cur.lastrowid  # Get the FSID and update the ancestors
             
-            # Create a new descendant item in the tree
-            self.cur.execute('''INSERT INTO tree (fsid,ancestor) 
-            VALUES (?,?);''', (descendant, ancestor))
-            
+            # Create the filesystem item (with blank metadata)
+            self.cur.execute('''INSERT INTO filesystem (fsid,name) 
+                        VALUES (?,?);''', 
+                        (descendant,sqlite3.Binary(pc[idx][0])))
+            1
             # Update the ancestor items to point to this descendant
             self.cur.execute('''UPDATE tree SET descendant=? 
             WHERE fsid = ?;''', (descendant,ancestor))
