@@ -56,7 +56,8 @@ CREATE TABLE stat (
 );
 
 CREATE TABLE filesystem (
-    fsid    INTEGER NOT NULL PRIMARY KEY,
+    fsid    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    ancestor_fsid INTEGER,
     name    BLOB NOT NULL,
     gitmode INTEGER,
     hash    BLOB,
@@ -66,13 +67,8 @@ CREATE TABLE filesystem (
     shamissing  INTEGER
 );
 
-CREATE INDEX filesystem_name ON filesystem (name);
-
-CREATE TABLE tree (
-    fsid        INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    ancestor    INTEGER,
-    descendant  INTEGER
-);
+PRAGMA journal_mode=WAL;
+PRAGMA wal_autocheckpoint=0;
 
 PRAGMA user_version=%i;
 """ % VERSION
@@ -112,7 +108,8 @@ class Index:
         # Database caching variables
         # It is not efficient to hit the disk on every filepath, and sqlite
         # works best with bulk queries.
-        self.levels = []    # Stores most recent FSID path to speed drecurse inserts
+        self.pathcache = {} # Stores path->FSID map to speed inserts
+        self.lastpath = None # Stores last inserted path, to maintain database integrity
         self.metacache = {} # Stores meta SHA1/metaid mappings to avoid database lookups
         
     def __del__(self):
@@ -199,11 +196,10 @@ class Index:
         # Get the root node's fsid
         self.cur.execute("""
         WITH RECURSIVE subtree(fsid,path) AS (
-            VALUES (0,'')
+            VALUES (?,'')
             UNION ALL
-            SELECT tree.fsid, subtree.path || '/' || filesystem.name FROM tree, subtree
-            INNER JOIN filesystem ON tree.fsid=filesystem.fsid
-            WHERE tree.ancestor=subtree.fsid
+            SELECT filesystem.fsid, subtree.path || '/' || filesystem.name FROM filesystem, subtree
+            WHERE filesystem.ancestor_fsid=subtree.fsid
         )
         SELECT fsid FROM subtree
         WHERE path=?;
@@ -218,11 +214,10 @@ class Index:
         WITH RECURSIVE subtree(fsid,path) AS (
             VALUES (?,'')
             UNION ALL
-            SELECT tree.fsid, subtree.path || '/' || filesystem.name FROM tree, subtree
-            INNER JOIN filesystem ON tree.fsid=filesystem.fsid
-            WHERE tree.ancestor=subtree.fsid
+            SELECT filesystem.fsid, subtree.path || '/' || filesystem.name FROM filesystem, subtree
+            WHERE filesystem.ancestor_fsid=subtree.fsid
         )
-        SELECT  subtree.path, 
+        SELECT  subtree.path,
                 stat.atime, stat.atime_ns,
                 stat.mtime, stat.mtime_ns, 
                 stat.ctime, stat.ctime_ns,
@@ -235,83 +230,57 @@ class Index:
         
         yield self.cur.fetchone()
 
-    def insert_or_replace_path(self, path, pst, meta=None, hashgen=None):
-        """inserts or replaces an existing path in the index.
-        this function is slower then using the stateful insertions, but
-        can perform an arbitrary insert of a full path."""
+    def add(self, path, pst, meta=None, hashgen=None):
+        """add a path to the index"""
+
         # Ensure we're dealing with an absolute path
         rp = realpath(path)
         
         # Break into components
         pc = path_components(rp)
+
+        ancestor = 0 # fsid we want to start from should always be 0
         
-        ancestor = 0 # fsid we want to start from
-        highest_idx = 0 # how much of the path already exists
+        # Keep the path cache size manageable by pruning entries.        
+        self.pathcache = { key:self.pathcache[key] for key in (v[1] for v in pc) if key in self.pathcache }
         
-        # See how much of the path fsid we already know
-        # This is derecurse aware, but not required - you can safely
-        # jump around and but take a performance hit.
-        for idx, (name,fsid) in enumerate(self.levels):
-            # did we run out of path components to check (already have all)
-            if idx > len(pc)-1:
+        # Find the longest path we have cached
+        highest_idx = len(pc) # start at end
+        for name,path in reversed(pc):
+            if path in self.pathcache:
+                ancestor = self.pathcache[path]
                 break
-            highest_idx = idx   # Mark the idx we're up to
-            if pc[idx][0] != name:
-                # name does not match - can't match more. 
-                break
-            # If we didn't match, then this idx becomes an ancestor
-            ancestor = fsid
-            
- 
-        # Slice known path back to what we know
-        self.levels = self.levels[:highest_idx]
- 
-        # Query for the remainder of the tree that we need
-        for idx in range(highest_idx, len(pc)):
-            name = pc[idx][0]
-            
-            self.cur.execute('''
-            SELECT tree.fsid FROM tree
-            INNER JOIN filesystem ON tree.fsid = filesystem.fsid
-            WHERE filesystem.name = ? AND ancestor = ?;''',
-            (sqlite3.Binary(name), ancestor))
-            
-            highest_idx = idx
-            
-            rows = self.cur.fetchall()
-            if len(rows) == 0:
-                break
-            elif len(rows) == 1:
-                ancestor = rows[0]['fsid']
-                self.levels.append((name, ancestor)) # store new path
-            else:
-                raise CorruptIndex('got more then 1 identical name in same directory')
+            highest_idx -= 1
         
-        # Create the rest of the tree that we need
-        for idx in range(highest_idx, len(pc)):
-            # Create a new descendant item in the tree
-            self.cur.execute('''INSERT INTO tree (ancestor) 
-            VALUES (?);''', (ancestor,))
-            descendant = self.cur.lastrowid  # Get the FSID and update the ancestors
-            
-            # Create the filesystem item (with blank metadata)
-            self.cur.execute('''INSERT INTO filesystem (fsid,name) 
-                        VALUES (?,?);''', 
-                        (descendant,sqlite3.Binary(pc[idx][0])))
-            1
-            # Update the ancestor items to point to this descendant
-            self.cur.execute('''UPDATE tree SET descendant=? 
-            WHERE fsid = ?;''', (descendant,ancestor))
-            
-            # Set new ancestor object
-            ancestor = descendant
-            self.levels.append((pc[idx][0], ancestor)) # store new path
-            
-        # By the time we get here the real object should exist and be
-        # the ancestor. All we need to do is update it with the real
-        # stat data.
-        # TODO: figure out how we should infer/handle these in SQL
-        # Determine hash validity
+#       # This is way too slow to ever do - but we can post-merge to eliminate
+        # duplicates.
+#         # If we need to descend in path depth by any amount, then we can't
+#         # reliably know there isn't a name collision at the bottom somewhere.
+#         for idx in range(highest_idx, len(pc)-1):
+#             name = pc[idx][0]
+#               
+#             self.cur.execute('''
+#             SELECT tree.fsid FROM tree
+#             INNER JOIN filesystem ON tree.fsid = filesystem.fsid
+#             WHERE filesystem.name = ? AND ancestor = ?;''',
+#             (sqlite3.Binary(name), ancestor))
+#               
+#             highest_idx = idx
+#               
+#             rows = self.cur.fetchall()
+#             if len(rows) == 0:
+#                 break
+#             elif len(rows) == 1:
+#                 ancestor = rows[0]['fsid']
+#                 self.pathcache[pc[idx][1]] = ancestor
+#             else:
+#                 raise CorruptIndex('got more then 1 identical name in same directory')
+         
+        # Did we reach the bottom of the tree?
+        if highest_idx == len(pc)-1:
+            update = True   # Yes - do an update and not an insert
+        
+        # Convert supplied metadata to SQL friendly forms
         hashvalid = False
         if hashgen:
             (gitmode, sha) = hashgen(name)
@@ -320,23 +289,34 @@ class Index:
             (gitmode, sha) = (0, None)
         
         shamissing = False  # Should we set shamissing always?
-        
         exists = False if pst is None else True
-        
         sha_blob = None if sha is None else sqlite3.Binary(sha)
         
+        # If we have blob metadata, deduplicate and store it.
         metaid = None
         if meta:
             metaid = self._insert_or_ignore_fs_meta(meta)
         
-        self.cur.execute('''UPDATE filesystem 
-        SET gitmode=?, fs_exists=?, hashvalid=?, shamissing=?, hash=?,
-        metaid=? 
-        WHERE fsid=?''',
-        (gitmode,exists,hashvalid,shamissing,sha_blob,metaid,ancestor))
+        # Create all the tree we need to have.
+        for idx in range(highest_idx, len(pc)):
+            name_blob = buffer(pc[idx][0])
+            
+            # Create the filesystem item
+            self.cur.execute('''INSERT INTO filesystem 
+            (name,gitmode,fs_exists,hashvalid,shamissing,hash,metaid,ancestor_fsid) 
+            VALUES (?,?,?,?,?,?,?,?);''', 
+            (name_blob,gitmode,exists,hashvalid,shamissing,
+             sha_blob,metaid,ancestor))
+            
+            descendant = self.cur.lastrowid  # Get the FSID
+            
+            # Set new ancestor object
+            ancestor = descendant
+            self.pathcache[pc[idx][1]] = ancestor
         
         # Add additional metadata
         self._insert_or_replace_fs_stat(ancestor, pst)
+        
         return ancestor # Return the fsid for other users
     
     def clear(self):
