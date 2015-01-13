@@ -46,9 +46,6 @@ def update_index(top, excluded_paths, exclude_rxs):
     elapsed = time.time() - index_start
     paths_per_sec = total / elapsed if elapsed else 0
     progress('Indexing: %d, done (%d paths/s).\n' % (total, paths_per_sec))
-    
-    # Reconcile the index to remove duplicates.
-    curIndex.reconcile()
 
 optspec = """
 bup index <-p|m|s|u> [options...] <filenames...>

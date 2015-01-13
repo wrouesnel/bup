@@ -25,19 +25,27 @@ FAKE_SHA = '\x01'*20
 # code with?
 INDEX_DB = """
 CREATE TABLE hashes (
-    fsid      INTEGER NOT NULL,
+    pathhash  BLOB NOT NULL PRIMARY KEY,
+    objhash   BLOB NOT NULL,
     offset    INTEGER NOT NULL,
-    length    INTEGER NOT NULL,
-    hash      BLOB PRIMARY KEY
-);
+    length    INTEGER NOT NULL
+) WITHOUT ROWID;
 
 CREATE TABLE meta (
-    metaid    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    metablob  BLOB UNIQUE
-);
+    metahash  BLOB NOT NULL PRIMARY KEY,
+    metablob  BLOB
+) WITHOUT ROWID;
 
-CREATE TABLE stat (
-    fsid       INTEGER NOT NULL PRIMARY KEY,
+CREATE TABLE filesystem (
+    name        BLOB NOT NULL,
+    ancestor_pathhash BLOB NOT NULL,
+    metahash    BLOB,
+    
+    buphash    BLOB,
+    hashvalid   INTEGER,
+    gitmode     INTEGER,
+    path_exists INTEGER,
+    shamissing  INTEGER,
     
     dev        INTEGER,
     ino        INTEGER,
@@ -52,20 +60,10 @@ CREATE TABLE stat (
     mtime      INTEGER,
     mtime_ns   INTEGER,
     ctime      INTEGER,
-    ctime_ns   INTEGER
-);
-
-CREATE TABLE filesystem (
-    fsid    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    ancestor_fsid INTEGER,
-    name    BLOB NOT NULL,
-    gitmode INTEGER,
-    hash    BLOB,
-    metaid  INTEGER,
-    fs_exists INTEGER,
-    hashvalid   INTEGER,
-    shamissing  INTEGER
-);
+    ctime_ns   INTEGER,
+    
+    PRIMARY KEY (ancestor_pathhash, name)
+) WITHOUT ROWID;
 
 PRAGMA journal_mode=WAL;
 PRAGMA wal_autocheckpoint=0;
@@ -89,11 +87,15 @@ class PathNotFound(IndexDataException):
     pass
 
 class Index:
-    def __init__(self, dbpath):
+    def __init__(self, dbpath, metacache_max = 16777216):
+        """represents an sqlite-based index on disk.
+        
+        :metacache_max number of bytes of metadata to cache before flushing to disk
+        """
         self.dbpath = dbpath
         
         self.db = None
-        
+
         if not os.path.exists(self.dbpath):
             self._create_database()
         
@@ -104,15 +106,18 @@ class Index:
         self._check_schema()
         
         self.cur = self.db.cursor()
+        self.cur.execute('PRAGMA synchronous = OFF;')
         
         # Database caching variables
         # It is not efficient to hit the disk on every filepath, and sqlite
         # works best with bulk queries.
-        self.pathcache = {} # Stores path->FSID map to speed inserts
-        self.lastpath = None # Stores last inserted path, to maintain database integrity
-        self.metacache = {} # Stores meta SHA1/metaid mappings to avoid database lookups
+        self.metacache = {} # Stores meta SHA1/metaid mappings to avoid database lookups 
+        self.metacache_max = metacache_max
+        self.metacache_cur = 0
         
     def __del__(self):
+        self._flush_metacache()
+    
         self.db.commit()
         self.db.close()
 
@@ -139,49 +144,35 @@ class Index:
         db.executescript(INDEX_DB)
         db.commit()
         db.close()
-
-    def _insert_or_replace_fs_stat(self, fsid, st):
-        """maps a stat struct to the stat table format for a given fsid"""
-        atime = xstat.nsecs_to_timespec(st.st_atime)
-        mtime = xstat.nsecs_to_timespec(st.st_mtime)
-        ctime = xstat.nsecs_to_timespec(st.st_ctime)
-        
-        self.cur.execute('''INSERT OR REPLACE INTO stat 
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);''',
-        (fsid, st.st_dev, st.st_ino, st.st_mode, st.st_nlink, 
-        st.st_uid, st.st_gid, st.st_rdev, st.st_size, 
-         atime[0], atime[1], mtime[0], mtime[1], ctime[0], ctime[1]))
     
+    def _flush_metacache(self):
+        """flushes metacache to database"""
+        self.cur.executemany('''
+        INSERT OR IGNORE INTO meta (metahash,metablob)
+        VALUES (?,?)''', self.metacache.iteritems())
+        # Drop the cache.
+        self.metacache = {}
+        self.metacache_cur = 0
+            
     def _insert_or_ignore_fs_meta(self, meta):
         """deduplicates encoded FS metadata objects into the database.
         data is deduplicated by storing an in-memory table of hashes
         to meta ID mappings.
         """
-        # TODO: maintain dict size somehow
-        metadata = meta.encode()
-        metasha = Sha1(metadata)
-        metablob = sqlite3.Binary(meta.encode())
+        metadata = buffer(meta.encode())
+        metasha = buffer(Sha1(metadata).digest())
         
-        # Lookup sha first
-        metaid = self.metacache.get(metasha, None)
-        if metaid is None:
-            # Query and insert
-            self.cur.execute('''SELECT metaid FROM meta 
-            WHERE metablob=?''', (metablob,))
-            r = self.cur.fetchall()
-            assert(len(r) <= 1)
-            # If this metadata exists, deduplicate it.
-            if len(r) == 0:
-                self.cur.execute('''INSERT INTO meta (metablob)
-                VALUES (?)''', (metablob,))
-                metaid = self.cur.lastrowid
-            else:
-                metaid = r[0]['metaid']
-            # Update in-memory cache
-            self.metacache[metasha] = metaid
+        # Add the data to the memory map
+        if metasha not in self.metacache:
+            self.metacache[metasha] = metadata
+            self.metacache_cur += len(metadata)
         
-        assert(metaid is not None)
-        return metaid
+        # If the metadata cache is full, flush it to the database
+        if self.metacache_cur >= self.metacache_max:
+            self._flush_metacache()
+        
+        # Return the hash value
+        return metasha
 
     def __iter__(self):
         """default iterator method - akin to iterating over root"""
@@ -232,92 +223,64 @@ class Index:
 
     def add(self, path, pst, meta=None, hashgen=None):
         """add a path to the index"""
-
-        # Ensure we're dealing with an absolute path
-        rp = realpath(path)
         
         # Break into components
-        pc = path_components(rp)
-
-        ancestor = 0 # fsid we want to start from should always be 0
-        
-        # Keep the path cache size manageable by pruning entries.        
-        self.pathcache = { key:self.pathcache[key] for key in (v[1] for v in pc) if key in self.pathcache }
-        
-        # Find the longest path we have cached
-        highest_idx = len(pc) # start at end
-        for name,path in reversed(pc):
-            if path in self.pathcache:
-                ancestor = self.pathcache[path]
-                break
-            highest_idx -= 1
-        
-#       # This is way too slow to ever do - but we can post-merge to eliminate
-        # duplicates.
-#         # If we need to descend in path depth by any amount, then we can't
-#         # reliably know there isn't a name collision at the bottom somewhere.
-#         for idx in range(highest_idx, len(pc)-1):
-#             name = pc[idx][0]
-#               
-#             self.cur.execute('''
-#             SELECT tree.fsid FROM tree
-#             INNER JOIN filesystem ON tree.fsid = filesystem.fsid
-#             WHERE filesystem.name = ? AND ancestor = ?;''',
-#             (sqlite3.Binary(name), ancestor))
-#               
-#             highest_idx = idx
-#               
-#             rows = self.cur.fetchall()
-#             if len(rows) == 0:
-#                 break
-#             elif len(rows) == 1:
-#                 ancestor = rows[0]['fsid']
-#                 self.pathcache[pc[idx][1]] = ancestor
-#             else:
-#                 raise CorruptIndex('got more then 1 identical name in same directory')
-         
-        # Did we reach the bottom of the tree?
-        if highest_idx == len(pc)-1:
-            update = True   # Yes - do an update and not an insert
+        pc = path_components(path)
+        name = pc[-1][0]
+        ancestor_pathhash = None
+        if len(pc) > 1:
+            ancestor_pathhash = Sha1(pc[-2][1]).digest()
         
         # Convert supplied metadata to SQL friendly forms
         hashvalid = False
         if hashgen:
-            (gitmode, sha) = hashgen(name)
+            (gitmode, buphash) = hashgen(name)
             hashvalid = True
         else:
-            (gitmode, sha) = (0, None)
+            (gitmode, buphash) = (0, None)
         
         shamissing = False  # Should we set shamissing always?
         exists = False if pst is None else True
-        sha_blob = None if sha is None else sqlite3.Binary(sha)
         
         # If we have blob metadata, deduplicate and store it.
-        metaid = None
+        metahash = None
         if meta:
-            metaid = self._insert_or_ignore_fs_meta(meta)
+            metahash = self._insert_or_ignore_fs_meta(meta)
         
-        # Create all the tree we need to have.
-        for idx in range(highest_idx, len(pc)):
-            name_blob = buffer(pc[idx][0])
-            
-            # Create the filesystem item
-            self.cur.execute('''INSERT INTO filesystem 
-            (name,gitmode,fs_exists,hashvalid,shamissing,hash,metaid,ancestor_fsid) 
-            VALUES (?,?,?,?,?,?,?,?);''', 
-            (name_blob,gitmode,exists,hashvalid,shamissing,
-             sha_blob,metaid,ancestor))
-            
-            descendant = self.cur.lastrowid  # Get the FSID
-            
-            # Set new ancestor object
-            ancestor = descendant
-            self.pathcache[pc[idx][1]] = ancestor
+        atime = xstat.nsecs_to_timespec(pst.st_atime)
+        mtime = xstat.nsecs_to_timespec(pst.st_mtime)
+        ctime = xstat.nsecs_to_timespec(pst.st_ctime)
         
-        # Add additional metadata
-        self._insert_or_replace_fs_stat(ancestor, pst)
+        fs_tuple = (
+                    buffer(name), 
+                    buffer(ancestor_pathhash), 
+                    buffer(metahash) if metahash else None, 
+                    buffer(buphash) if buphash else None, 
+                    hashvalid, 
+                    gitmode, 
+                    exists, 
+                    shamissing,
+                    pst.st_dev, 
+                    pst.st_ino, 
+                    pst.st_mode, 
+                    pst.st_nlink, 
+                    pst.st_uid, 
+                    pst.st_gid, 
+                    pst.st_rdev, 
+                    pst.st_size, 
+                    atime[0], 
+                    atime[1], 
+                    mtime[0], 
+                    mtime[1], 
+                    ctime[0], 
+                    ctime[1]
+                    )
+
+        self.cur.execute('''INSERT OR REPLACE INTO filesystem 
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);''', 
+        fs_tuple)
         
-        return ancestor # Return the fsid for other users
+        return
     
     def clear(self):
         '''drop all data from the database'''
