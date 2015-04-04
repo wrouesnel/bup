@@ -37,7 +37,8 @@ CREATE TABLE meta (
 ) WITHOUT ROWID;
 
 CREATE TABLE filesystem (
-    name        BLOB NOT NULL,
+    name        BLOB,
+    pathhash    BLOB NOT NULL,
     ancestor_pathhash BLOB NOT NULL,
     metahash    BLOB,
     
@@ -227,6 +228,7 @@ class Index:
         # Break into components
         pc = path_components(path)
         name = pc[-1][0]
+        pathhash = Sha1(path).digest()
         ancestor_pathhash = None
         if len(pc) > 1:
             ancestor_pathhash = Sha1(pc[-2][1]).digest()
@@ -253,6 +255,7 @@ class Index:
         
         fs_tuple = (
                     buffer(name), 
+                    buffer(pathhash),
                     buffer(ancestor_pathhash), 
                     buffer(metahash) if metahash else None, 
                     buffer(buphash) if buphash else None, 
@@ -277,7 +280,7 @@ class Index:
                     )
 
         self.cur.execute('''INSERT OR REPLACE INTO filesystem 
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);''', 
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);''', 
         fs_tuple)
         
         return
